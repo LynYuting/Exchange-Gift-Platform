@@ -267,7 +267,6 @@ textarea.input { min-height: 72px; resize: vertical; }
   padding: 14px 0; border-bottom: 1px solid var(--linea); background: var(--nieve);
 }
 .item.own { grid-template-columns: 26px 76px minmax(0, 1fr) auto auto; }
-.item.editing { display: block; }
 .rank { font-family: var(--serif); font-size: 22px; line-height: 1; color: var(--noche); text-align: center; font-variant-numeric: tabular-nums; }
 .thumb-btn { display: block; width: 100%; height: 100%; padding: 0; border: 0; background: none; cursor: zoom-in; }
 .order-ctl { display: flex; align-items: center; gap: 2px; }
@@ -303,7 +302,7 @@ textarea.input { min-height: 72px; resize: vertical; }
 .add-form .full { grid-column: 1 / -1; }
 .add-form h3 { font-family: var(--sans); font-weight: 700; font-size: 16px; }
 .photo-pick { display: flex; align-items: center; gap: 14px; }
-.photo-pick .thumb { width: 60px; height: 60px; }
+.photo-pick .thumb { width: 60px; height: 60px; flex: none; }
 .photo-pick input[type='file'] { font-size: 14px; max-width: 100%; color: var(--gris); }
 .photo-pick input[type='file']::file-selector-button {
   font: inherit; font-weight: 600; color: var(--pino); background: var(--papel);
@@ -312,8 +311,22 @@ textarea.input { min-height: 72px; resize: vertical; }
 .photo-pick input[type='file']::file-selector-button:hover { background: #e3e9e5; }
 .form-row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
 
-.edit-row { grid-column: 1 / -1; }
-.edit-row .add-form { margin-top: 0; background: #f6f8f7; }
+.add-gift { margin-top: 18px; }
+
+/* Ventana para agregar o editar un regalo */
+dialog.item-dialog {
+  padding: 0; width: min(560px, calc(100vw - 32px)); max-width: none;
+  max-height: min(92vh, 760px); max-height: min(92dvh, 760px);
+  border-top: 4px solid var(--noche); overflow: hidden;
+}
+dialog.item-dialog[open] { display: flex; flex-direction: column; }
+.item-dlg-top {
+  display: flex; align-items: center; justify-content: space-between; gap: 16px; flex: none;
+  padding: 18px 22px 14px; border-bottom: 1px solid var(--linea);
+}
+.item-dlg-top h2 { font-size: 24px; margin: 0; }
+dialog.item-dialog .add-form { margin: 0; padding: 20px 22px 22px; border-radius: 0; overflow-y: auto; overscroll-behavior: contain; }
+dialog.item-dialog .dialog-actions { margin-top: 6px; }
 
 /* ---------- Panel del organizador ---------- */
 .group-head-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px 20px; flex-wrap: wrap; }
@@ -468,6 +481,12 @@ dialog.photo-viewer::backdrop { background: rgba(10, 22, 18, 0.9); }
   .person-row input[name=pemail] { grid-column: 1; grid-row: 2; }
   .person-row .icon-btn { grid-column: 2; grid-row: 1 / span 2; }
   dialog.admin-dialog { width: 100vw; max-height: none; height: 100vh; height: 100dvh; border-radius: 0; }
+  /* En el teléfono, la ventana del regalo sale desde abajo */
+  dialog.item-dialog { width: 100vw; margin: auto 0 0; border-radius: 14px 14px 0 0; max-height: 94dvh; }
+  .item-dlg-top { padding: 16px 18px 12px; }
+  .item-dlg-top h2 { font-size: 21px; }
+  dialog.item-dialog .add-form { padding: 18px 18px calc(20px + env(safe-area-inset-bottom)); }
+  dialog.item-dialog .dialog-actions .btn { flex: 1; }
   .admin-top h2 { font-size: 22px; }
   .people thead { display: none; }
   .people, .people tbody, .people tr, .people td { display: block; width: 100%; }

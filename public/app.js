@@ -67,6 +67,8 @@
     '<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><rect x="3" y="8" width="18" height="13" rx="1.5"/><path d="M3 12h18M12 8v13"/><path d="M12 8c-1.5-3-5-4-5.5-2S9 8 12 8zm0 0c1.5-3 5-4 5.5-2S15 8 12 8z"/></svg>';
   const ICON_X =
     '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>';
+  const ICON_PLUS =
+    '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>';
   const ICON_GRIP =
     '<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="9" cy="6" r="1.6"/><circle cx="15" cy="6" r="1.6"/><circle cx="9" cy="12" r="1.6"/><circle cx="15" cy="12" r="1.6"/><circle cx="9" cy="18" r="1.6"/><circle cx="15" cy="18" r="1.6"/></svg>';
   const ICON_UP =
@@ -955,28 +957,15 @@
           {
             class: 'btn-text',
             type: 'button',
-            onclick: () => {
-              li.classList.add('editing');
-              li.replaceChildren(
-                h(
-                  'div',
-                  { class: 'edit-row' },
-                  itemForm({
-                    item,
-                    currency,
-                    title: t('Editar regalo'),
-                    submitText: t('Guardar cambios'),
-                    onCancel: () => renderGroup(),
-                    onSubmit: async (fd) => {
-                      await api(`/api/wishlist/${item.id}`, { method: 'PATCH', form: fd });
-                      toast(t('Cambios guardados'));
-                      await refreshGroup();
-                    },
-                  })
-                )
-              );
-              li.querySelector('input')?.focus();
-            },
+            onclick: () =>
+              openItemDialog({
+                item,
+                currency,
+                title: t('Editar regalo'),
+                submitText: t('Guardar cambios'),
+                save: (fd) => api(`/api/wishlist/${item.id}`, { method: 'PATCH', form: fd }),
+                doneMsg: t('Cambios guardados'),
+              }),
           },
           t('Editar')
         ),
@@ -1038,7 +1027,7 @@
     let drag = null;
     list.addEventListener('pointerdown', (e) => {
       const handle = e.target.closest('.drag-handle');
-      if (!handle || e.button > 0 || list.querySelector('.editing')) return;
+      if (!handle || e.button > 0) return;
       e.preventDefault();
       drag = { li: handle.closest('li'), before: ids().join(), pointerId: e.pointerId };
       handle.setPointerCapture(e.pointerId);
@@ -1096,7 +1085,7 @@
     });
   }
 
-  function itemForm({ item = null, currency, title, submitText, onSubmit, onCancel }) {
+  function itemForm({ item = null, currency, submitText, onSubmit, onCancel }) {
     const err = h('p', { class: 'form-error full', role: 'alert' });
     const name = h('input', { class: 'input', name: 'name', required: true, maxlength: 120, value: item ? item.name : '', placeholder: t('Ej. Audífonos inalámbricos') });
     const cost = h('input', { class: 'input', name: 'cost', inputmode: 'decimal', value: item && item.cost !== null ? String(item.cost) : '', placeholder: '0' });
@@ -1142,7 +1131,6 @@
           }
         },
       },
-      h('h3', { class: 'full' }, title),
       h('label', { class: 'field' }, h('span', {}, t('Nombre del regalo')), name),
       h('label', { class: 'field' }, h('span', {}, t('Costo aproximado ({currency})', { currency })), cost),
       h('label', { class: 'field full' }, h('span', {}, t('Link')), link, h('small', {}, t('Opcional. Dónde se puede comprar.'))),
@@ -1162,29 +1150,62 @@
           )
         )
       ),
+      err,
+      h('div', { class: 'dialog-actions full' }, h('button', { class: 'btn btn-ghost', type: 'button', onclick: onCancel }, t('Cancelar')), submit)
+    );
+  }
+
+  // Ventana para agregar o editar un regalo de la wishlist.
+  function openItemDialog({ item = null, currency, title, submitText, save, doneMsg }) {
+    const dlg = h('dialog', { class: 'item-dialog', 'aria-labelledby': 'item-dlg-title' });
+    const close = () => dlg.close();
+    const form = itemForm({
+      item,
+      currency,
+      submitText,
+      onCancel: close,
+      onSubmit: async (fd) => {
+        await save(fd);
+        close(); // primero se cierra, para que el aviso no se vaya con la ventana
+        toast(doneMsg);
+        await refreshGroup();
+      },
+    });
+    dlg.append(
       h(
         'div',
-        { class: 'form-row full' },
-        submit,
-        onCancel ? h('button', { class: 'btn btn-ghost', type: 'button', onclick: onCancel }, t('Cancelar')) : null
+        { class: 'item-dlg-top' },
+        h('h2', { id: 'item-dlg-title' }, title),
+        h('button', { class: 'icon-btn', type: 'button', 'aria-label': t('Cerrar'), onclick: close }, svg(ICON_X))
       ),
-      err
+      form
     );
+    dlg.addEventListener('close', () => dlg.remove());
+    document.body.append(dlg);
+    dlg.showModal();
+    form.querySelector('input[name=name]').focus();
   }
 
   function myWishlistSection(d) {
     const cur = d.group.currency;
     const items = d.myWishlist;
-    const form = itemForm({
-      currency: cur,
-      title: t('Agregar una idea de regalo'),
-      submitText: t('Agregar a mi wishlist'),
-      onSubmit: async (fd) => {
-        await api(`/api/groups/${d.group.id}/wishlist`, { method: 'POST', form: fd });
-        toast(t('Regalo agregado a tu wishlist'));
-        await refreshGroup();
+    const addBtn = h(
+      'button',
+      {
+        class: 'btn add-gift',
+        type: 'button',
+        onclick: () =>
+          openItemDialog({
+            currency: cur,
+            title: t('Agregar una idea de regalo'),
+            submitText: t('Agregar a mi wishlist'),
+            save: (fd) => api(`/api/groups/${d.group.id}/wishlist`, { method: 'POST', form: fd }),
+            doneMsg: t('Regalo agregado a tu wishlist'),
+          }),
       },
-    });
+      svg(ICON_PLUS),
+      t('Agregar una idea de regalo')
+    );
     let list = null;
     if (items.length) {
       list = h('ol', { class: 'items sortable' }, items.map((i, n) => itemRow(i, { own: true, currency: cur, rank: n + 1 })));
@@ -1201,7 +1222,7 @@
       ),
       items.length > 1 ? h('p', { class: 'list-hint' }, t('Ordénala por preferencia: la número 1 es la que más quieres. Arrastra desde ⠿ o usa las flechas.')) : null,
       list || h('p', { class: 'empty' }, t('Agrega ideas de regalo para que la persona a la que le tocaste sepa qué darte.')),
-      form
+      addBtn
     );
   }
 

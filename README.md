@@ -137,7 +137,7 @@ La app activa **Row Level Security** en sus tablas: así la API REST pública de
 2. Se abre **Administrar intercambio** con el enlace del grupo: pulsa **Copiar enlace** o **Enviar por WhatsApp** y mándalo al grupo.
 3. Quien tiene correo registrado solo entra con ese Google y ya está en su nombre. Los demás abren el enlace, entran con Google, **eligen su nombre** y confirman **"Sí, soy …"**. Los nombres ya elegidos aparecen tachados y los que tienen correo registrado, reservados.
 4. Cuando quieras (mínimo 3 personas), pulsa **Hacer el sorteo**. Quien elija su nombre después del sorteo ve su asignación al entrar.
-5. Cada participante ve a quién le regala, arma su wishlist y la **ordena** (arrastrando ⠿ o con las flechas; la número 1 es la favorita).
+5. Cada participante ve a quién le regala y arma su wishlist: **“+ Agregar una idea de regalo”** abre una ventana con nombre, costo, link y foto (**Editar** abre la misma ventana). Luego la **ordena** arrastrando ⠿ o con las flechas; la número 1 es la favorita.
 
 **Si alguien eligió el nombre equivocado**, en el panel verás qué cuenta eligió cada nombre: pulsa **Liberar** y el nombre vuelve a estar disponible en el enlace. Si ya se había hecho el sorteo, esa persona pudo ver la asignación; en ese caso reinicia el sorteo.
 
