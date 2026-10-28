@@ -193,11 +193,30 @@ ALTER TABLE members        ENABLE ROW LEVEL SECURITY;
 ALTER TABLE wishlist_items ENABLE ROW LEVEL SECURITY;
 `;
 
-// Crea las tablas la primera vez (una sola vez por instancia del servidor).
+// Súbelo cada vez que cambie SCHEMA, para que se aplique en la base existente.
+const SCHEMA_VERSION = 3;
+
+// Crea o actualiza las tablas una sola vez por instancia del servidor. Si la base ya
+// está en la versión actual, basta una consulta rápida (importante en Vercel, donde
+// cada arranque en frío pasaría por aquí).
 let readyPromise;
 function ready() {
   if (!readyPromise) {
-    readyPromise = engine.transaction((tx) => tx.exec(SCHEMA)).catch((err) => {
+    readyPromise = (async () => {
+      try {
+        const r = await engine.query('SELECT version FROM app_meta LIMIT 1');
+        if (r.rows[0] && r.rows[0].version >= SCHEMA_VERSION) return;
+      } catch {
+        /* la tabla app_meta aún no existe: primera vez */
+      }
+      await engine.transaction((tx) =>
+        tx.exec(`${SCHEMA}
+CREATE TABLE IF NOT EXISTS app_meta (version integer NOT NULL);
+ALTER TABLE app_meta ENABLE ROW LEVEL SECURITY;
+DELETE FROM app_meta;
+INSERT INTO app_meta (version) VALUES (${SCHEMA_VERSION});`)
+      );
+    })().catch((err) => {
       readyPromise = null; // reintenta en la siguiente petición
       throw err;
     });

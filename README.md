@@ -2,8 +2,10 @@
 
 Plataforma sencilla para organizar intercambios de regalos.
 
-- El organizador crea un grupo y escribe solo los **nombres** de los participantes.
-- Comparte **un solo enlace** con todo el grupo. Cada quien entra con **la cuenta de Google que quiera** y **elige su nombre** de la lista; cada nombre se puede elegir una sola vez.
+- El organizador crea un grupo y escribe los **nombres** de los participantes. Si sabe el **correo de Google** de alguien, lo agrega (opcional).
+- Dos formas de entrar, que se pueden mezclar en el mismo grupo:
+  - **Con correo registrado:** esa persona entra con su Google y queda directo en su nombre.
+  - **Con el enlace del grupo:** los demás entran con la cuenta de Google que quieran y **eligen su nombre** de la lista; cada nombre se puede elegir una sola vez. Los nombres con correo registrado aparecen reservados.
 - La barra lateral muestra todos los grupos en los que está la persona.
 - En cada grupo ve una etiqueta **De: (su nombre) / Para: (a quién le regala)**, y abajo a los demás participantes con **Para: \*\*\***.
 - **Nadie ve las asignaciones de los demás, ni el organizador.** El servidor nunca las envía.
@@ -127,9 +129,9 @@ La app activa **Row Level Security** en sus tablas: así la API REST pública de
 
 ## 7. Cómo se usa
 
-1. **Organizador**: entra → **Crear intercambio** → nombre, fecha, presupuesto y los **nombres** del grupo. Puedes pegar una lista con un nombre por línea. Marca "Yo también participo" si entras al sorteo.
+1. **Organizador**: entra → **Crear intercambio** → nombre, fecha, presupuesto y los **nombres** del grupo, con su correo de Google si lo sabes. Puedes pegar una lista, una persona por línea (`Ana`, `Ana, ana@gmail.com` o `Ana <ana@gmail.com>`). Marca "Yo también participo" si entras al sorteo.
 2. Se abre **Administrar intercambio** con el enlace del grupo: pulsa **Copiar enlace** o **Enviar por WhatsApp** y mándalo al grupo.
-3. Cada quien abre el enlace, entra con Google, **elige su nombre** y confirma **"Sí, soy …"**. Los nombres ya elegidos aparecen tachados.
+3. Quien tiene correo registrado solo entra con ese Google y ya está en su nombre. Los demás abren el enlace, entran con Google, **eligen su nombre** y confirman **"Sí, soy …"**. Los nombres ya elegidos aparecen tachados y los que tienen correo registrado, reservados.
 4. Cuando quieras (mínimo 3 personas), pulsa **Hacer el sorteo**. Quien elija su nombre después del sorteo ve su asignación al entrar.
 5. Cada participante ve a quién le regala, arma su wishlist y la **ordena** (arrastrando ⠿ o con las flechas; la número 1 es la favorita).
 

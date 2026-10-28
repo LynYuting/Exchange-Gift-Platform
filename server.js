@@ -165,7 +165,12 @@ function idParam(v) {
   return n;
 }
 
-// Espera a que existan las tablas antes de atender cualquier petición de la API.
+// Configuración pública: no necesita la base de datos, así la pantalla de entrada no espera.
+app.get('/api/config', (req, res) => {
+  res.json({ googleClientId: GOOGLE_CLIENT_ID || null, devLogin: DEV_LOGIN });
+});
+
+// Espera a que existan las tablas antes de atender cualquier otra petición de la API.
 app.use(
   '/api',
   wrap(async (req, res, next) => {
@@ -255,9 +260,6 @@ const publicUser = (u) => ({ email: u.email, name: u.google_name, picture: u.pic
 // ---------------------------------------------------------------------------
 // Autenticación
 // ---------------------------------------------------------------------------
-app.get('/api/config', (req, res) => {
-  res.json({ googleClientId: GOOGLE_CLIENT_ID || null, devLogin: DEV_LOGIN });
-});
 
 app.post(
   '/api/auth/google',
@@ -353,6 +355,11 @@ async function assertNameFree(q, groupId, name, exceptId = 0) {
     exceptId
   );
   if (clash) fail(409, `Ya hay alguien llamado “${name}” en este intercambio. Usa un nombre distinto, por ejemplo con apellido.`);
+}
+
+async function assertEmailFree(q, groupId, mail, exceptId = 0) {
+  const clash = await q.get('SELECT 1 FROM members WHERE group_id = ? AND email = ? AND id <> ?', groupId, mail, exceptId);
+  if (clash) fail(409, `El correo ${mail} ya está registrado para otra persona de este intercambio.`);
 }
 
 // Nombre del organizador: el que tiene en el grupo, o el de su cuenta de Google.
@@ -455,7 +462,7 @@ app.get(
   wrap(async (req, res) => {
     const { g, me, isOrganizer } = await groupAccess(idParam(req.params.id), req.user);
     const members = await db.all(
-      `SELECT m.id, m.display_name, m.user_id, u.email AS account
+      `SELECT m.id, m.display_name, m.user_id, m.email, u.email AS account
        FROM members m LEFT JOIN users u ON u.id = m.user_id
        WHERE m.group_id = ? ORDER BY lower(m.display_name), m.id`,
       g.id
@@ -488,7 +495,7 @@ app.get(
         name: m.display_name,
         isMe: !!me && m.id === me.id,
         joined: !!m.user_id,
-        ...(isOrganizer ? { account: m.account } : {}),
+        ...(isOrganizer ? { account: m.account, email: m.email } : {}),
       })),
       myWishlist: me ? await itemsFor(me.id) : [],
       receiverWishlist: receiver ? await itemsFor(receiver.id) : null,
@@ -547,10 +554,13 @@ app.post(
     requireOrganizer(a);
     requireNotDrawn(a.g);
     const name = str(req.body.name, 'el nombre', { max: 60, required: true });
+    const mail = optEmail(req.body.email);
     const { n } = await db.get('SELECT COUNT(*)::int AS n FROM members WHERE group_id = ?', a.g.id);
     if (n >= MAX_MEMBERS) fail(400, `Máximo ${MAX_MEMBERS} participantes por grupo.`);
     await assertNameFree(db, a.g.id, name);
-    await db.run('INSERT INTO members (group_id, display_name) VALUES (?, ?)', a.g.id, name);
+    if (mail) await assertEmailFree(db, a.g.id, mail);
+    await db.run('INSERT INTO members (group_id, display_name, email) VALUES (?, ?, ?)', a.g.id, name, mail);
+    await linkGroupByEmail(a.g.id); // si esa cuenta ya existe, queda ligada de una vez
     res.status(201).json({ ok: true });
   })
 );
@@ -563,9 +573,13 @@ app.patch(
     requireOrganizer(a);
     const m = await db.get('SELECT * FROM members WHERE id = ? AND group_id = ?', idParam(req.params.mid), a.g.id);
     if (!m) fail(404, 'Ese participante no existe.');
-    const name = str(req.body.name, 'el nombre', { max: 60, required: true });
+    const name = 'name' in req.body ? str(req.body.name, 'el nombre', { max: 60, required: true }) : m.display_name;
+    const mail = 'email' in req.body ? optEmail(req.body.email) : m.email;
     await assertNameFree(db, a.g.id, name, m.id);
-    await db.run('UPDATE members SET display_name = ? WHERE id = ?', name, m.id);
+    if (mail && mail !== m.email) await assertEmailFree(db, a.g.id, mail, m.id);
+    // Cambiar el correo no desliga a quien ya entró; para eso está "Liberar".
+    await db.run('UPDATE members SET display_name = ?, email = ? WHERE id = ?', name, mail, m.id);
+    await linkGroupByEmail(a.g.id);
     res.json({ ok: true });
   })
 );
@@ -580,8 +594,15 @@ app.post(
     requireOrganizer(a);
     const m = await db.get('SELECT id FROM members WHERE id = ? AND group_id = ?', idParam(req.params.mid), a.g.id);
     if (!m) fail(404, 'Ese participante no existe.');
-    // También se borra el correo (grupos anteriores) para que no se vuelva a vincular solo.
-    await db.run('UPDATE members SET user_id = NULL, joined_at = NULL, email = NULL WHERE id = ?', m.id);
+    // Si el correo registrado es el de la cuenta que se libera, se borra (si no, se volvería
+    // a ligar sola). Si es otro, se conserva y esa persona queda ligada en cuanto entre.
+    await db.run(
+      `UPDATE members SET user_id = NULL, joined_at = NULL,
+         email = CASE WHEN email = (SELECT u.email FROM users u WHERE u.id = members.user_id) THEN NULL ELSE email END
+       WHERE id = ?`,
+      m.id
+    );
+    await linkGroupByEmail(a.g.id);
     res.json({ ok: true });
   })
 );
@@ -638,12 +659,19 @@ app.get(
     };
     if (req.user) {
       const rows = await db.all(
-        'SELECT id, display_name, user_id FROM members WHERE group_id = ? ORDER BY lower(display_name), id',
+        'SELECT id, display_name, user_id, email FROM members WHERE group_id = ? ORDER BY lower(display_name), id',
         g.id
       );
       const mine = rows.find((r) => r.user_id === req.user.id);
       out.myName = mine ? mine.display_name : null;
-      out.names = rows.map((r) => ({ id: r.id, name: r.display_name, taken: !!r.user_id }));
+      // Un nombre con correo registrado solo lo puede tomar esa cuenta (entra sola, sin elegir).
+      // No se envía el correo, solo que está reservado.
+      out.names = rows.map((r) => ({
+        id: r.id,
+        name: r.display_name,
+        taken: !!r.user_id,
+        reserved: !r.user_id && !!r.email && r.email !== req.user.email,
+      }));
     }
     res.json(out);
   })
@@ -658,11 +686,14 @@ app.post(
     const result = await db.transaction(async (tx) => {
       const g = await findGroupByInvite(tx, req.params.token);
       // FOR UPDATE: si dos personas eligen el mismo nombre a la vez, solo una gana.
-      const m = await tx.get('SELECT id, display_name, user_id FROM members WHERE id = ? AND group_id = ? FOR UPDATE', memberId, g.id);
+      const m = await tx.get('SELECT id, display_name, user_id, email FROM members WHERE id = ? AND group_id = ? FOR UPDATE', memberId, g.id);
       if (!m) fail(404, 'Ese nombre ya no está en el intercambio. Recarga la página.');
       if (m.user_id === req.user.id) return { groupId: g.id, name: m.display_name };
       if (m.user_id) {
         fail(409, `Alguien más ya eligió “${m.display_name}”. Si ese es tu nombre, avísale a quien organiza para que lo libere.`);
+      }
+      if (m.email && m.email !== req.user.email) {
+        fail(409, `“${m.display_name}” está reservado para otra cuenta de Google. Si eres tú, entra con el correo que registró quien organiza, o pídele que lo cambie.`);
       }
       const mine = await tx.get('SELECT display_name FROM members WHERE group_id = ? AND user_id = ?', g.id, req.user.id);
       if (mine) fail(409, `Ya estás en este intercambio como ${mine.display_name}. Cada cuenta puede elegir un solo nombre.`);

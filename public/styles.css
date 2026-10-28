@@ -112,7 +112,21 @@ textarea.input { min-height: 72px; resize: vertical; }
 }
 .login-art .tag-wrap { width: min(420px, 100%); transform: rotate(-4deg); }
 .login-actions { display: flex; flex-direction: column; gap: 16px; align-items: flex-start; }
-.gsi-slot { min-height: 44px; }
+.gsi-slot { position: relative; width: 280px; max-width: 100%; min-height: 44px; }
+.gsi-placeholder {
+  position: absolute; left: 0; top: 0; width: 100%; height: 44px; border-radius: 22px;
+  background: #dbe3df; animation: gsi-pulse 1.1s ease-in-out infinite alternate;
+}
+.gsi-button { opacity: 0; transition: opacity 180ms ease; }
+.gsi-slot.ready .gsi-button { opacity: 1; }
+.gsi-slot.ready .gsi-placeholder { display: none; }
+@keyframes gsi-pulse { from { opacity: 0.55; } to { opacity: 1; } }
+
+/* Mientras se confirma la sesión */
+.boot {
+  min-height: 100vh; min-height: 100dvh; display: flex; align-items: center; justify-content: center; gap: 12px;
+  color: var(--gris); font-size: 16px;
+}
 .dev-login {
   display: flex; flex-direction: column; gap: 10px;
   border: 1px dashed var(--oro); border-radius: var(--r-md);
@@ -165,7 +179,6 @@ textarea.input { min-height: 72px; resize: vertical; }
 .user-box .btn-text { color: var(--nieve); font-size: 13px; }
 
 .main { padding: clamp(20px, 4vw, 48px); min-width: 0; }
-/* .main-inner { max-width: 900px; display: flex; flex-direction: column; gap: 40px; } */
 .main-inner { max-width: 1080px; margin: 0 auto; display: flex; flex-direction: column; gap: 40px; }
 
 /* ---------- Encabezado del grupo ---------- */
@@ -338,7 +351,7 @@ dialog.admin-dialog[open] { display: flex; flex-direction: column; }
 .pill { display: inline-block; font-size: 12px; font-weight: 600; padding: 2px 8px; border-radius: 99px; background: #e6ece9; color: var(--gris); white-space: nowrap; }
 .pill.in { background: #dcefe3; color: var(--ok); }
 
-.add-person { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: end; margin-top: 14px; }
+.add-person { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr) auto; gap: 10px; align-items: end; margin-top: 14px; }
 .people .person-name { font-weight: 600; }
 
 .draw-box {
@@ -359,7 +372,7 @@ dialog.admin-dialog[open] { display: flex; flex-direction: column; }
 .panel h2 { font-family: var(--sans); font-weight: 700; font-size: 17px; }
 .panel .hint { color: var(--gris); font-size: 14px; margin-top: -8px; }
 .person-rows { display: flex; flex-direction: column; gap: 10px; }
-.person-row { display: grid; grid-template-columns: minmax(0, 1fr) 40px; gap: 10px; align-items: center; }
+.person-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr) 40px; gap: 10px; align-items: center; }
 .check-row { display: flex; align-items: center; gap: 10px; font-weight: 500; cursor: pointer; }
 .check-row input { width: 18px; height: 18px; accent-color: var(--pino); }
 .icon-btn {
@@ -451,6 +464,9 @@ dialog.photo-viewer::backdrop { background: rgba(10, 22, 18, 0.9); }
   .item.own .order-ctl { grid-column: 3; grid-row: 2; justify-self: end; }
   .rank { font-size: 19px; }
   .add-person { grid-template-columns: 1fr; }
+  .person-row { grid-template-columns: minmax(0, 1fr) 40px; row-gap: 6px; padding-bottom: 10px; border-bottom: 1px solid var(--linea); }
+  .person-row input[name=pemail] { grid-column: 1; grid-row: 2; }
+  .person-row .icon-btn { grid-column: 2; grid-row: 1 / span 2; }
   dialog.admin-dialog { width: 100vw; max-height: none; height: 100vh; height: 100dvh; border-radius: 0; }
   .admin-top h2 { font-size: 22px; }
   .people thead { display: none; }
@@ -462,6 +478,8 @@ dialog.photo-viewer::backdrop { background: rgba(10, 22, 18, 0.9); }
 
 @media (prefers-reduced-motion: reduce) {
   .tag.reveal .para .tag-name { animation: none; }
+  .gsi-placeholder { animation: none; }
+  .gsi-button { transition: none; }
 }
 
 /* ---------- Páginas legales (privacidad, términos) ---------- */
@@ -511,4 +529,5 @@ dialog.photo-viewer::backdrop { background: rgba(10, 22, 18, 0.9); }
 .name-tag:disabled { cursor: not-allowed; background: #e2e8e4; }
 .name-tag:disabled::before { background: #e2e8e4; box-shadow: inset 0 0 0 1.5px #cdd6d1; }
 .name-tag:disabled .name-tag-name { color: var(--gris); text-decoration: line-through; text-decoration-thickness: 1px; }
+.name-tag.reserved .name-tag-name { text-decoration: none; }
 .join-foot { font-size: 15px; }

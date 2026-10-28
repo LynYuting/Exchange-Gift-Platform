@@ -62,6 +62,7 @@
     const data = await res.json().catch(() => ({}));
     if (res.status === 401 && path !== '/api/me' && state.user) {
       state.user = null;
+      setSessionHint(false);
       renderLogin('Tu sesión terminó. Vuelve a entrar.');
     }
     if (!res.ok) {
@@ -219,7 +220,29 @@
         /* sin almacenamiento: no pasa nada */
       }
     },
+    remove(k) {
+      try {
+        localStorage.removeItem(k);
+      } catch {
+        /* sin almacenamiento: no pasa nada */
+      }
+    },
   };
+
+  // Pista para el arranque: si este navegador ya inició sesión, mostramos "Cargando…"
+  // en lugar de la pantalla de entrada mientras confirmamos la sesión.
+  const SESSION_HINT = 'sesion';
+  const setSessionHint = (on) => (on ? storage.set(SESSION_HINT, '1') : storage.remove(SESSION_HINT));
+
+  // La configuración se pide una sola vez y se comparte.
+  let configPromise = null;
+  function getConfig() {
+    if (!configPromise) {
+      configPromise = api('/api/config').then((c) => (state.config = c));
+      configPromise.catch(() => (configPromise = null)); // permite reintentar
+    }
+    return configPromise;
+  }
 
   // -------------------------------------------------------------------------
   // Etiqueta de regalo
@@ -260,73 +283,120 @@
     });
   }
 
+  function onLoggedIn(user) {
+    setSessionHint(true);
+    state.user = user;
+    startApp();
+  }
+
+  // Monta el botón de Google sin mostrar el recuadro vacío que dibuja mientras carga:
+  // queda oculto (con un marcador gris en su lugar) hasta que su iframe termina de cargar.
+  function mountGoogleButton(slot, clientId, err) {
+    loadGoogleScript()
+      .then(() => {
+        if (!slot.isConnected) return;
+        window.google.accounts.id.initialize({
+          client_id: clientId,
+          ux_mode: 'popup',
+          auto_select: false,
+          callback: async (resp) => {
+            err.textContent = '';
+            try {
+              const { user } = await api('/api/auth/google', { method: 'POST', body: { credential: resp.credential } });
+              onLoggedIn(user);
+            } catch (e) {
+              err.textContent = e.message;
+            }
+          },
+        });
+        const host = h('div', { class: 'gsi-button' });
+        slot.append(host);
+        let shown = false;
+        const reveal = () => {
+          if (shown) return;
+          shown = true;
+          slot.classList.add('ready');
+          slot.removeAttribute('aria-busy');
+        };
+        const watch = (frame) => frame.addEventListener('load', () => setTimeout(reveal, 80), { once: true });
+        const obs = new MutationObserver(() => {
+          const frame = host.querySelector('iframe');
+          if (frame) {
+            obs.disconnect();
+            watch(frame);
+          }
+        });
+        obs.observe(host, { childList: true, subtree: true });
+        window.google.accounts.id.renderButton(host, {
+          theme: 'filled_black',
+          size: 'large',
+          shape: 'pill',
+          text: 'signin_with',
+          locale: 'es-419',
+          width: 280,
+        });
+        const frame = host.querySelector('iframe');
+        if (frame) {
+          obs.disconnect();
+          watch(frame);
+        }
+        setTimeout(() => {
+          obs.disconnect();
+          reveal(); // por si el iframe nunca avisa
+        }, 3000);
+      })
+      .catch((e) => {
+        slot.remove();
+        err.textContent = e.message;
+      });
+  }
+
+  function devLoginForm(err) {
+    const input = h('input', { class: 'input', type: 'email', placeholder: 'correo@ejemplo.com', required: true, 'aria-label': 'Correo de prueba' });
+    return h(
+      'div',
+      { class: 'dev-login' },
+      h('p', {}, 'Modo de prueba (DEV_LOGIN): entra con cualquier correo, sin Google.'),
+      h(
+        'form',
+        {
+          onsubmit: async (e) => {
+            e.preventDefault();
+            try {
+              const { user } = await api('/api/auth/dev', { method: 'POST', body: { email: input.value } });
+              onLoggedIn(user);
+            } catch (ex) {
+              err.textContent = ex.message;
+            }
+          },
+        },
+        input,
+        h('button', { class: 'btn', type: 'submit' }, 'Entrar')
+      )
+    );
+  }
+
   function renderLogin(message) {
     document.title = 'Intercambio navideño';
     const err = h('p', { class: 'form-error', role: 'alert' }, message || '');
-    const slot = h('div', { class: 'gsi-slot' });
-    const actions = h('div', { class: 'login-actions' }, slot);
-    const { googleClientId, devLogin } = state.config || {};
+    const slot = h('div', { class: 'gsi-slot', 'aria-busy': 'true' }, h('span', { class: 'gsi-placeholder', 'aria-hidden': 'true' }));
+    const devBox = h('div');
+    const actions = h('div', { class: 'login-actions' }, slot, devBox, err);
 
-    if (googleClientId) {
-      loadGoogleScript()
-        .then(() => {
-          window.google.accounts.id.initialize({
-            client_id: googleClientId,
-            ux_mode: 'popup',
-            auto_select: false,
-            callback: async (resp) => {
-              err.textContent = '';
-              try {
-                const { user } = await api('/api/auth/google', { method: 'POST', body: { credential: resp.credential } });
-                state.user = user;
-                startApp();
-              } catch (e) {
-                err.textContent = e.message;
-              }
-            },
-          });
-          window.google.accounts.id.renderButton(slot, {
-            theme: 'filled_black',
-            size: 'large',
-            shape: 'pill',
-            text: 'signin_with',
-            locale: 'es-419',
-            width: 280,
-          });
-        })
-        .catch((e) => (err.textContent = e.message));
-    } else if (!devLogin) {
-      err.textContent = 'El servidor no tiene configurado GOOGLE_CLIENT_ID. Revisa el archivo .env.';
-    }
-
-    if (devLogin) {
-      const input = h('input', { class: 'input', type: 'email', placeholder: 'correo@ejemplo.com', required: true, 'aria-label': 'Correo de prueba' });
-      actions.append(
-        h(
-          'div',
-          { class: 'dev-login' },
-          h('p', {}, 'Modo de prueba (DEV_LOGIN): entra con cualquier correo, sin Google.'),
-          h(
-            'form',
-            {
-              onsubmit: async (e) => {
-                e.preventDefault();
-                try {
-                  const { user } = await api('/api/auth/dev', { method: 'POST', body: { email: input.value } });
-                  state.user = user;
-                  startApp();
-                } catch (ex) {
-                  err.textContent = ex.message;
-                }
-              },
-            },
-            input,
-            h('button', { class: 'btn', type: 'submit' }, 'Entrar')
-          )
-        )
-      );
-    }
-    actions.append(err);
+    getConfig()
+      .then((cfg) => {
+        if (!slot.isConnected) return; // ya cambió de pantalla
+        if (cfg.devLogin) devBox.replaceWith(devLoginForm(err));
+        if (cfg.googleClientId) mountGoogleButton(slot, cfg.googleClientId, err);
+        else {
+          slot.remove();
+          if (!cfg.devLogin) err.textContent = 'El servidor no tiene configurado GOOGLE_CLIENT_ID. Revisa las variables de entorno.';
+        }
+      })
+      .catch((e) => {
+        slot.remove();
+        err.textContent = e.message;
+      });
 
     // Si llegó con el enlace del grupo, le decimos a qué lo invitaron.
     const r = currentRoute();
@@ -373,6 +443,7 @@
       /* igual cerramos */
     }
     if (window.google && window.google.accounts) window.google.accounts.id.disableAutoSelect();
+    setSessionHint(false);
     state.user = null;
     state.groups = [];
     state.detail = null;
@@ -498,7 +569,7 @@
       toast(`Ya estás en “${inv.groupName}” como ${inv.myName}`);
       return location.replace(`#/g/${inv.groupId}`);
     }
-    if (!inv.names.some((n) => !n.taken)) {
+    if (!inv.names.some((n) => !n.taken && !n.reserved)) {
       return message(
         'Ya no quedan nombres por elegir',
         h('p', {}, `Todos los nombres de “${inv.groupName}” ya fueron elegidos. Si falta el tuyo, pídele a ${inv.organizerName} que te agregue.`),
@@ -534,15 +605,15 @@
         inv.names.map((n) => {
           const btn = h(
             'button',
-            { class: 'name-tag', type: 'button', disabled: n.taken },
+            { class: `name-tag${n.reserved ? ' reserved' : ''}`, type: 'button', disabled: n.taken || n.reserved },
             h('span', { class: 'name-tag-name' }, n.name),
-            h('span', { class: 'name-tag-status' }, n.taken ? 'Ya lo eligieron' : 'Soy yo')
+            h('span', { class: 'name-tag-status' }, n.taken ? 'Ya lo eligieron' : n.reserved ? 'Reservado para otra cuenta' : 'Soy yo')
           );
-          if (!n.taken) btn.addEventListener('click', () => choose(n, btn));
+          if (!n.taken && !n.reserved) btn.addEventListener('click', () => choose(n, btn));
           return h('li', {}, btn);
         })
       ),
-      h('p', { class: 'join-foot' }, `Si tu nombre no aparece o alguien ya eligió el tuyo, avísale a ${inv.organizerName}.`)
+      h('p', { class: 'join-foot' }, `Si tu nombre no aparece, está reservado para otra cuenta o alguien ya eligió el tuyo, avísale a ${inv.organizerName}.`)
     );
   }
 
@@ -1080,6 +1151,7 @@
     // --- Participantes ---
     const addErr = h('p', { class: 'form-error', role: 'alert' });
     const addName = h('input', { class: 'input', placeholder: 'Nombre que verá el grupo', maxlength: 60, required: true });
+    const addEmail = h('input', { class: 'input', type: 'email', placeholder: 'Opcional', maxlength: 254 });
     const addBtn = h('button', { class: 'btn', type: 'submit' }, 'Agregar');
     const addForm = h(
       'form',
@@ -1090,7 +1162,7 @@
           addErr.textContent = '';
           busy(addBtn, true, 'Agregando…');
           try {
-            await api(`/api/groups/${gid}/members`, { method: 'POST', body: { name: addName.value } });
+            await api(`/api/groups/${gid}/members`, { method: 'POST', body: { name: addName.value, email: addEmail.value } });
             toast(`${addName.value.trim()} se agregó a la lista`);
             await refreshGroup({ groups: true });
             document.querySelector('#admin-dialog .add-person input')?.focus();
@@ -1101,13 +1173,14 @@
         },
       },
       h('label', { class: 'field' }, h('span', {}, 'Agregar a alguien'), addName),
+      h('label', { class: 'field' }, h('span', {}, 'Correo de Google (opcional)'), addEmail),
       addBtn
     );
     const peopleBlock = h(
       'div',
       { class: 'admin-block' },
       h('h3', {}, 'Participantes'),
-      h('p', { class: 'admin-note' }, 'El nombre que escribas es el que verá todo el grupo. Si alguien eligió un nombre que no era el suyo, usa “Liberar” para que la persona correcta lo elija.'),
+      h('p', { class: 'admin-note' }, 'El nombre que escribas es el que verá todo el grupo. Si registras el correo de Google de alguien, entra directo a su nombre; los demás lo eligen con el enlace. Si alguien eligió un nombre que no era el suyo, usa “Liberar”.'),
       n
         ? h(
             'table',
@@ -1308,7 +1381,7 @@
     };
     const view = () => {
       tr.replaceChildren(
-        h('td', { class: 'person-name' }, p.name, p.isMe ? ' (tú)' : ''),
+        h('td', { class: 'person-name' }, h('div', {}, p.name, p.isMe ? ' (tú)' : ''), !p.joined && p.email ? h('small', { class: 'muted' }, `Entra con ${p.email}`) : null),
         h('td', { class: 'email' }, p.joined ? h('span', { class: 'pill in' }, p.account || 'Ya entró') : h('span', { class: 'pill' }, 'Pendiente')),
         h(
           'td',
@@ -1326,11 +1399,12 @@
     };
     const edit = () => {
       const nameInput = h('input', { class: 'input', value: p.name, maxlength: 60, 'aria-label': 'Nombre' });
+      const emailInput = h('input', { class: 'input', type: 'email', value: p.email || '', maxlength: 254, placeholder: 'Correo de Google (opcional)', 'aria-label': 'Correo de Google (opcional)' });
       const save = h('button', { class: 'btn-text', type: 'button' }, 'Guardar');
       save.addEventListener('click', async () => {
         save.disabled = true;
         try {
-          await api(`/api/groups/${g.id}/members/${p.id}`, { method: 'PATCH', body: { name: nameInput.value } });
+          await api(`/api/groups/${g.id}/members/${p.id}`, { method: 'PATCH', body: { name: nameInput.value, email: emailInput.value } });
           toast('Nombre actualizado');
           await refreshGroup({ groups: true });
         } catch (e) {
@@ -1338,11 +1412,13 @@
           save.disabled = false;
         }
       });
-      nameInput.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') save.click();
-      });
+      for (const i of [nameInput, emailInput]) {
+        i.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter') save.click();
+        });
+      }
       tr.replaceChildren(
-        h('td', { colspan: 2 }, nameInput),
+        h('td', { colspan: 2 }, h('div', { class: 'edit-person' }, nameInput, emailInput)),
         h('td', { class: 'actions' }, save, h('button', { class: 'btn-text', type: 'button', onclick: view }, 'Cancelar'))
       );
       nameInput.focus();
@@ -1383,7 +1459,7 @@
     const meName = h('input', { class: 'input', value: state.user.name || '', maxlength: 60, placeholder: 'Tu nombre en el grupo', 'aria-label': 'Tu nombre en el grupo' });
 
     const updateCount = () => {
-      const others = [...rowsBox.querySelectorAll('input')].filter((i) => i.value.trim()).length;
+      const others = [...rowsBox.querySelectorAll('input[name=pname]')].filter((i) => i.value.trim()).length;
       const total = others + (meCheck.checked ? 1 : 0);
       count.textContent = `${total} ${total === 1 ? 'persona' : 'personas'} en total. Se necesitan al menos 3 para el sorteo; puedes agregar más después.`;
     };
@@ -1393,22 +1469,33 @@
     });
     meName.addEventListener('input', updateCount);
 
-    const addRow = (name = '', after = null, focus = false) => {
-      const input = h('input', { class: 'input', value: name, maxlength: 60, placeholder: 'Nombre', 'aria-label': 'Nombre de un participante', oninput: updateCount });
+    // "Ana", "Ana, ana@gmail.com", "Ana <ana@gmail.com>" o "Ana	ana@gmail.com" → { name, email }
+    const parseLine = (line) => {
+      const m = line.match(/[^\s<>,;]+@[^\s<>,;]+\.[^\s<>,;]+/);
+      const email = m ? m[0] : '';
+      const name = (m ? line.replace(m[0], '') : line).replace(/[<>,;\t]+/g, ' ').replace(/\s+/g, ' ').trim();
+      return { name, email };
+    };
+    const addRow = ({ name = '', email = '' } = {}, after = null, focus = false) => {
+      const input = h('input', { class: 'input', name: 'pname', value: name, maxlength: 60, placeholder: 'Nombre', 'aria-label': 'Nombre de un participante', oninput: updateCount });
+      const mail = h('input', { class: 'input', name: 'pemail', type: 'email', value: email, maxlength: 254, placeholder: 'Correo de Google (opcional)', 'aria-label': 'Correo de Google (opcional)' });
       const row = h(
         'div',
         { class: 'person-row' },
         input,
+        mail,
         h('button', { class: 'icon-btn', type: 'button', 'aria-label': 'Quitar de la lista', onclick: () => { row.remove(); updateCount(); } }, svg(ICON_X))
       );
-      // Pegar una lista (un nombre por línea) crea una fila por nombre.
+      // Pegar una lista (una persona por línea, con o sin correo) crea una fila por persona.
       input.addEventListener('paste', (e) => {
         const lines = (e.clipboardData?.getData('text') || '').split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
-        if (lines.length < 2) return;
+        if (lines.length < 2 && !(lines[0] && parseLine(lines[0]).email)) return;
         e.preventDefault();
-        input.value = lines[0];
+        const [first, ...rest] = lines.map(parseLine);
+        input.value = first.name;
+        if (first.email) mail.value = first.email;
         let prev = row;
-        for (const l of lines.slice(1)) prev = addRow(l, prev);
+        for (const l of rest) prev = addRow(l, prev);
         updateCount();
       });
       if (after) after.after(row);
@@ -1428,7 +1515,17 @@
         onsubmit: async (e) => {
           e.preventDefault();
           err.textContent = '';
-          const participants = [...rowsBox.querySelectorAll('input')].map((i) => i.value.trim()).filter(Boolean).map((name) => ({ name }));
+          const participants = [];
+          for (const r of rowsBox.children) {
+            const name = r.querySelector('[name=pname]').value.trim();
+            const email = r.querySelector('[name=pemail]').value.trim();
+            if (!name && !email) continue;
+            if (!name) {
+              err.textContent = `Falta el nombre de ${email}.`;
+              return;
+            }
+            participants.push({ name, email });
+          }
           busy(submit, true, 'Creando…');
           try {
             const { id } = await api('/api/groups', {
@@ -1471,10 +1568,10 @@
         'div',
         { class: 'panel' },
         h('h2', {}, 'Los demás participantes'),
-        h('p', { class: 'hint' }, 'Escribe solo los nombres, tal como quieres que los vea el grupo. Puedes pegar una lista con un nombre por línea.'),
+        h('p', { class: 'hint' }, 'Escribe cada nombre tal como quieres que lo vea el grupo. Si sabes el correo de Google de alguien, agrégalo: entrará directo a su nombre sin tener que elegirlo. Puedes pegar una lista, una persona por línea.'),
         rowsBox,
         count,
-        h('div', {}, h('button', { class: 'btn btn-ghost', type: 'button', onclick: () => addRow('', null, true) }, '+ Agregar otra persona'))
+        h('div', {}, h('button', { class: 'btn btn-ghost', type: 'button', onclick: () => addRow({}, null, true) }, '+ Agregar otra persona'))
       ),
       h('div', { class: 'create-actions' }, submit, h('a', { class: 'btn btn-ghost', href: '#/' }, 'Cancelar')),
       err
@@ -1485,7 +1582,7 @@
         'section',
         { class: 'create' },
         h('h1', {}, 'Crear intercambio'),
-        h('p', {}, 'Escribe los nombres del grupo. Después tendrás un enlace para compartir: cada quien entra con su cuenta de Google y elige su nombre.'),
+        h('p', {}, 'Escribe los nombres del grupo. Después tendrás un enlace para compartir: cada quien entra con su cuenta de Google y elige su nombre. Quien tenga correo registrado entra directo.'),
         form
       )
     );
@@ -1496,19 +1593,25 @@
   // Arranque
   // -------------------------------------------------------------------------
   async function boot() {
-    try {
-      state.config = await api('/api/config');
-    } catch (e) {
-      $app.replaceChildren(h('p', { class: 'loading', style: 'padding:32px' }, e.message));
-      return;
+    // Todo en paralelo: sesión, configuración y (si hará falta) el script de Google.
+    const hadSession = storage.get(SESSION_HINT) === '1';
+    const meP = api('/api/me')
+      .then((r) => r.user)
+      .catch(() => null);
+    getConfig().catch(() => {});
+    if (hadSession) {
+      $app.replaceChildren(h('div', { class: 'boot' }, svg(BRAND_TAG), h('span', {}, 'Cargando tus intercambios…')));
+    } else {
+      // Lo más probable es que no haya sesión: la pantalla de entrada aparece de inmediato.
+      loadGoogleScript().catch(() => {});
+      renderLogin();
     }
-    try {
-      state.user = (await api('/api/me')).user;
-    } catch {
-      state.user = null;
+    const user = await meP;
+    if (user) onLoggedIn(user);
+    else {
+      setSessionHint(false);
+      if (hadSession) renderLogin();
     }
-    if (state.user) startApp();
-    else renderLogin();
   }
   boot();
 })();
