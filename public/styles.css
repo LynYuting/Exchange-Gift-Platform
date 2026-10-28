@@ -564,7 +564,17 @@ dialog.photo-viewer::backdrop { background: rgba(10, 22, 18, 0.9); }
 .remembered .avatar { width: 42px; height: 42px; font-size: 17px; }
 .remembered .who { display: flex; flex-direction: column; min-width: 0; }
 .remembered strong { font-weight: 600; }
-.remembered span { font-size: 14px; color: var(--gris); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.remembered .who > span { font-size: 14px; color: var(--gris); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+button.remembered.go {
+  border: 0; font: inherit; color: inherit; text-align: left; cursor: pointer;
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.04), 0 0 0 1.5px transparent;
+  transition: box-shadow 0.15s ease, transform 0.15s ease;
+}
+button.remembered.go:hover { box-shadow: 0 6px 18px rgba(23, 57, 47, 0.14), 0 0 0 1.5px var(--pino); }
+button.remembered.go:active { transform: translateY(1px); }
+button.remembered.go[aria-busy='true'] { cursor: progress; opacity: 0.75; }
+.remembered .go-arrow { margin-left: auto; padding-left: 8px; font-size: 22px; line-height: 1; color: var(--pino); }
+.login-copy p.direct-note { font-size: 14px; max-width: 38ch; margin: -6px 0 0; }
 .legal .lang-link { font-size: 15px; }
 @media (max-width: 900px) {
   .shell { grid-template-columns: minmax(0, 1fr); }

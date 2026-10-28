@@ -116,6 +116,18 @@ CREATE TABLE IF NOT EXISTS sessions (
   expires_at  timestamptz NOT NULL
 );
 
+-- Dispositivos de confianza: tras entrar con Google, ese navegador puede volver a
+-- entrar directo ("Continuar como …") hasta expires_at, aunque se haya pulsado "Salir".
+CREATE TABLE IF NOT EXISTS devices (
+  token_hash  text PRIMARY KEY,              -- sha256 del token de la cookie "device"
+  user_id     integer NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  expires_at  timestamptz NOT NULL,
+  created_at  timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_devices_user ON devices(user_id);
+-- Las sesiones ya no se renuevan solas: las abiertas antes duran como mucho 14 días más.
+UPDATE sessions SET expires_at = LEAST(expires_at, now() + interval '14 days');
+
 CREATE TABLE IF NOT EXISTS gift_groups (
   id            integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   name          text NOT NULL,
@@ -188,13 +200,14 @@ CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
 -- de las tablas y no se ve afectada. En Neon no cambia nada.
 ALTER TABLE users          ENABLE ROW LEVEL SECURITY;
 ALTER TABLE sessions       ENABLE ROW LEVEL SECURITY;
+ALTER TABLE devices        ENABLE ROW LEVEL SECURITY;
 ALTER TABLE gift_groups    ENABLE ROW LEVEL SECURITY;
 ALTER TABLE members        ENABLE ROW LEVEL SECURITY;
 ALTER TABLE wishlist_items ENABLE ROW LEVEL SECURITY;
 `;
 
 // Súbelo cada vez que cambie SCHEMA, para que se aplique en la base existente.
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 
 // Crea o actualiza las tablas una sola vez por instancia del servidor. Si la base ya
 // está en la versión actual, basta una consulta rápida (importante en Vercel, donde

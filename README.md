@@ -12,7 +12,7 @@ Plataforma sencilla para organizar intercambios de regalos.
 - Cada quien arma su **wishlist** (nombre, costo, link y foto) **ordenada por preferencia**. Solo la ve la persona a la que le tocó regalarle, y cada quien ve la wishlist de su asignado.
 - El organizador administra todo desde una ventana: enlace, participantes, sorteo y datos del evento.
 - **Español / inglés:** el interruptor **ES · EN** (en la entrada y en la barra lateral) cambia toda la interfaz, las fechas, los mensajes del servidor y el botón de Google. Se recuerda en cada dispositivo.
-- **No hay que volver a entrar:** la sesión dura 180 días y se renueva sola mientras se use. Si la sesión se vence, la pantalla de entrada recuerda la cuenta (“Continuar como…” o “Usar otra cuenta de Google”) y Google puede entrar solo, salvo que hayas pulsado **Salir**.
+- **Dispositivo recordado 14 días:** al entrar con Google, ese navegador queda recordado 14 días. En ese tiempo, aunque pulses **Salir**, la pantalla de entrada muestra **“Continuar como …”** y con un toque entras directo, sin pasar por Google. Pasados los 14 días (contados desde la última vez que entraste con Google) hay que entrar con Google otra vez, y se renueva el plazo. **“Usar otra cuenta de Google”** hace que el dispositivo se olvide (útil en un teléfono prestado). El número de días se cambia con la variable `REMEMBER_DAYS`.
 
 ---
 
@@ -156,7 +156,8 @@ Reglas: una cuenta de Google solo puede elegir un nombre por intercambio, un nom
 - El enlace es aleatorio (128 bits). Sin iniciar sesión solo muestra el nombre del grupo; la lista de nombres aparece al entrar con Google.
 - Las wishlists y sus fotos solo las pueden pedir su dueño y la persona a la que le tocó regalarle. Las fotos se guardan en la base de datos y se sirven con verificación de sesión, nunca como enlaces públicos.
 - El inicio de sesión verifica el token de Google en el servidor y exige correo verificado.
-- Cookie de sesión `HttpOnly` + `Secure` + `SameSite=Lax`, protección CSRF, CSP estricta y límite de intentos de inicio de sesión.
+- Cookies de sesión y de dispositivo `HttpOnly` + `Secure` + `SameSite=Lax`; en la base solo se guarda su hash (sha256). Ninguna dura más de 14 días y entrar directo con el dispositivo no alarga el plazo.
+- Protección CSRF, CSP estricta y límite de intentos de inicio de sesión.
 - Las fotos se validan por su contenido (JPG, PNG, WEBP o GIF, máx. 4 MB; Vercel acepta hasta 4.5 MB por petición). El navegador las reduce a 1200 px antes de subirlas.
 
 > Nota honesta: con un solo enlace para todos, alguien podría elegir a propósito el nombre de otra persona para ver su asignación. El panel del organizador muestra qué cuenta eligió cada nombre, así que se notaría y se puede **Liberar**. Además, quien tenga acceso a la base de datos (tu cuenta de Neon/Supabase o la carpeta `data/`) sí podría leer las asignaciones.
@@ -187,6 +188,8 @@ intercambio-navideno/
 | Método | Ruta | Quién |
 |---|---|---|
 | POST | `/api/auth/google` | cualquiera (token de Google) |
+| POST | `/api/auth/device` | dispositivo recordado (“Continuar como …”) |
+| POST | `/api/auth/forget` | cualquiera (olvida este dispositivo) |
 | POST | `/api/auth/logout` | con sesión |
 | GET | `/api/me` | cualquiera |
 | GET / POST | `/api/groups` | con sesión |

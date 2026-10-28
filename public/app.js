@@ -320,9 +320,10 @@
     return gsiPromise;
   }
 
-  // Cuenta recordada en este dispositivo: permite "Continuar como …" sin escribir nada.
+  // Cuenta recordada en este dispositivo. Durante los días que el servidor la recuerda
+  // ("until"), "Continuar como …" entra directo, sin Google. Después, hay que pasar por Google.
   const ACCOUNT_KEY = 'cuenta';
-  const SIGNED_OUT = 'salio'; // tras "Salir" no se vuelve a entrar sola
+  const SIGNED_OUT = 'salio'; // tras "Salir", Google no vuelve a entrar solo
   function rememberedAccount() {
     try {
       const a = JSON.parse(storage.get(ACCOUNT_KEY) || 'null');
@@ -331,15 +332,20 @@
       return null;
     }
   }
+  const directUntil = (acct) => {
+    const d = acct && acct.until ? new Date(acct.until) : null;
+    return d && d.getTime() > Date.now() ? d : null;
+  };
   function forgetAccount() {
+    api('/api/auth/forget', { method: 'POST' }).catch(() => {}); // el servidor deja de recordar este dispositivo
     storage.remove(ACCOUNT_KEY);
     storage.remove(SIGNED_OUT);
     if (window.google && window.google.accounts) window.google.accounts.id.disableAutoSelect();
   }
 
-  function onLoggedIn(user) {
+  function onLoggedIn(user, rememberUntil = null) {
     setSessionHint(true);
-    storage.set(ACCOUNT_KEY, JSON.stringify({ email: user.email, name: user.name || '', picture: user.picture || '' }));
+    storage.set(ACCOUNT_KEY, JSON.stringify({ email: user.email, name: user.name || '', picture: user.picture || '', until: rememberUntil || null }));
     storage.remove(SIGNED_OUT);
     state.user = user;
     startApp();
@@ -361,8 +367,8 @@
           callback: async (resp) => {
             err.textContent = '';
             try {
-              const { user } = await api('/api/auth/google', { method: 'POST', body: { credential: resp.credential } });
-              onLoggedIn(user);
+              const { user, rememberUntil } = await api('/api/auth/google', { method: 'POST', body: { credential: resp.credential } });
+              onLoggedIn(user, rememberUntil);
             } catch (e) {
               err.textContent = e.message;
             }
@@ -423,8 +429,8 @@
           onsubmit: async (e) => {
             e.preventDefault();
             try {
-              const { user } = await api('/api/auth/dev', { method: 'POST', body: { email: input.value } });
-              onLoggedIn(user);
+              const { user, rememberUntil } = await api('/api/auth/dev', { method: 'POST', body: { email: input.value } });
+              onLoggedIn(user, rememberUntil);
             } catch (ex) {
               err.textContent = ex.message;
             }
@@ -442,18 +448,60 @@
     const slot = h('div', { class: 'gsi-slot', 'aria-busy': 'true' }, h('span', { class: 'gsi-placeholder', 'aria-hidden': 'true' }));
     const devBox = h('div');
     const acct = rememberedAccount();
+    const until = directUntil(acct);
+    const shortName = acct ? acct.name || acct.email.split('@')[0] : '';
+    const avatar = () =>
+      h('div', { class: 'avatar' }, acct.picture ? h('img', { src: acct.picture, alt: '', referrerpolicy: 'no-referrer' }) : initial(acct.name || acct.email));
+
+    // Dispositivo recordado: un toque y entra, sin pasar por Google.
+    let direct = null;
+    if (until) {
+      const label = h('strong', {}, t('Continuar como {name}', { name: shortName }));
+      direct = h(
+        'button',
+        {
+          class: 'remembered go',
+          type: 'button',
+          onclick: async () => {
+            if (direct.disabled) return;
+            direct.disabled = true;
+            direct.setAttribute('aria-busy', 'true');
+            label.textContent = t('Entrando…');
+            err.textContent = '';
+            try {
+              const { user, rememberUntil } = await api('/api/auth/device', { method: 'POST' });
+              onLoggedIn(user, rememberUntil);
+            } catch (e) {
+              if (e.status === 401) {
+                // Ya no está recordado en el servidor: ahora sí, con Google.
+                storage.set(ACCOUNT_KEY, JSON.stringify({ ...acct, until: null }));
+                renderLogin(e.message);
+              } else {
+                direct.disabled = false;
+                direct.removeAttribute('aria-busy');
+                label.textContent = t('Continuar como {name}', { name: shortName });
+                err.textContent = e.message;
+              }
+            }
+          },
+        },
+        avatar(),
+        h('span', { class: 'who' }, label, h('span', {}, acct.email)),
+        h('span', { class: 'go-arrow', 'aria-hidden': 'true' }, '→')
+      );
+    }
+
     const actions = h(
       'div',
       { class: 'login-actions' },
-      acct
-        ? h(
-            'div',
-            { class: 'remembered' },
-            h('div', { class: 'avatar' }, acct.picture ? h('img', { src: acct.picture, alt: '', referrerpolicy: 'no-referrer' }) : initial(acct.name || acct.email)),
-            h('div', { class: 'who' }, h('strong', {}, t('Hola de nuevo, {name}', { name: acct.name || acct.email.split('@')[0] })), h('span', {}, acct.email))
-          )
+      direct,
+      direct
+        ? h('p', { class: 'direct-note' }, t('En este dispositivo entras directo hasta el {date}. Después te pediremos entrar con Google otra vez.', { date: until.toLocaleDateString(locale(), { day: 'numeric', month: 'long' }) }))
         : null,
-      slot,
+      acct && !direct
+        ? h('div', { class: 'remembered' }, avatar(), h('div', { class: 'who' }, h('strong', {}, t('Hola de nuevo, {name}', { name: shortName })), h('span', {}, acct.email)))
+        : null,
+      direct ? null : slot,
       acct
         ? h(
             'button',
@@ -476,6 +524,7 @@
       .then((cfg) => {
         if (!slot.isConnected) return; // ya cambió de pantalla
         if (cfg.devLogin) devBox.replaceWith(devLoginForm(err));
+        if (direct) return; // entra directo: no hace falta el botón de Google
         if (cfg.googleClientId) {
           mountGoogleButton(slot, cfg.googleClientId, err, { hint: acct && acct.email, auto: !!acct && storage.get(SIGNED_OUT) !== '1' });
         }
@@ -553,6 +602,7 @@
     if (window.google && window.google.accounts) window.google.accounts.id.disableAutoSelect();
     storage.set(SIGNED_OUT, '1');
     setSessionHint(false);
+    $toasts.replaceChildren(); // los avisos de antes no se quedan en la pantalla de entrada
     state.user = null;
     state.groups = [];
     state.detail = null;
@@ -1715,9 +1765,7 @@
   async function boot() {
     // Todo en paralelo: sesión, configuración y (si hará falta) el script de Google.
     const hadSession = storage.get(SESSION_HINT) === '1';
-    const meP = api('/api/me')
-      .then((r) => r.user)
-      .catch(() => null);
+    const meP = api('/api/me').catch(() => ({}));
     getConfig()
       .then((cfg) => {
         // Si se abrió desde otra dirección de Vercel (de un deploy o de una rama),
@@ -1732,11 +1780,11 @@
       $app.replaceChildren(h('div', { class: 'boot' }, svg(BRAND_TAG), h('span', {}, t('Cargando tus intercambios…'))));
     } else {
       // Lo más probable es que no haya sesión: la pantalla de entrada aparece de inmediato.
-      loadGoogleScript().catch(() => {});
+      if (!directUntil(rememberedAccount())) loadGoogleScript().catch(() => {});
       renderLogin();
     }
-    const user = await meP;
-    if (user) onLoggedIn(user);
+    const { user, rememberUntil } = await meP;
+    if (user) onLoggedIn(user, rememberUntil);
     else {
       setSessionHint(false);
       if (hadSession) renderLogin();

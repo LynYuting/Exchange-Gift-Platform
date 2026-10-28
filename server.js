@@ -31,7 +31,10 @@ const PUBLIC_URL = (
 )
   .trim()
   .replace(/\/+$/, '');
-const SESSION_DAYS = 180; // se renueva sola mientras se use (ver middleware de sesión)
+// Días que un dispositivo queda recordado después de entrar con Google. Durante ese
+// tiempo se entra directo (también después de "Salir"); al terminar, hay que volver a
+// entrar con Google. Se puede cambiar con la variable REMEMBER_DAYS.
+const REMEMBER_DAYS = Math.min(Math.max(Number(process.env.REMEMBER_DAYS) || 14, 1), 180);
 const MAX_MEMBERS = 100;
 const MAX_ITEMS = 30;
 const MAX_PHOTO_MB = 4; // Vercel acepta como máximo 4.5 MB por petición
@@ -192,7 +195,7 @@ function idParam(v) {
 
 // Configuración pública: no necesita la base de datos, así la pantalla de entrada no espera.
 app.get('/api/config', (req, res) => {
-  res.json({ googleClientId: GOOGLE_CLIENT_ID || null, devLogin: DEV_LOGIN, publicUrl: PUBLIC_URL || null });
+  res.json({ googleClientId: GOOGLE_CLIENT_ID || null, devLogin: DEV_LOGIN, publicUrl: PUBLIC_URL || null, rememberDays: REMEMBER_DAYS });
 });
 
 // Espera a que existan las tablas antes de atender cualquier otra petición de la API.
@@ -209,15 +212,38 @@ app.use(
 // ---------------------------------------------------------------------------
 const sha256 = (t) => crypto.createHash('sha256').update(t).digest('hex');
 
-const SESSION_MS = SESSION_DAYS * 24 * 60 * 60 * 1000;
-const setSessionCookie = (res, token) =>
-  res.cookie('sid', token, { httpOnly: true, sameSite: 'lax', secure: IS_PROD, maxAge: SESSION_MS, path: '/' });
+const REMEMBER_MS = REMEMBER_DAYS * 24 * 60 * 60 * 1000;
+const cookieOpts = (expires) => ({ httpOnly: true, sameSite: 'lax', secure: IS_PROD, path: '/', expires });
 
-async function startSession(res, userId) {
+// Sesión: dura hasta que vence el dispositivo (o hasta "Salir").
+async function startSession(req, res, userId, expires) {
   const token = crypto.randomBytes(32).toString('base64url');
   await db.run('DELETE FROM sessions WHERE expires_at < now()'); // limpieza
-  await db.run('INSERT INTO sessions (token_hash, user_id, expires_at) VALUES (?, ?, ?)', sha256(token), userId, new Date(Date.now() + SESSION_MS));
-  setSessionCookie(res, token);
+  if (req.cookies.sid) await db.run('DELETE FROM sessions WHERE token_hash = ?', sha256(req.cookies.sid));
+  await db.run('INSERT INTO sessions (token_hash, user_id, expires_at) VALUES (?, ?, ?)', sha256(token), userId, expires);
+  res.cookie('sid', token, cookieOpts(expires));
+}
+
+// Dispositivo de confianza: se crea al entrar con Google y dura REMEMBER_DAYS.
+async function trustDevice(req, res, userId, expires) {
+  await db.run('DELETE FROM devices WHERE expires_at < now()'); // limpieza
+  if (req.cookies.device) await db.run('DELETE FROM devices WHERE token_hash = ?', sha256(req.cookies.device)); // reemplaza el anterior
+  const token = crypto.randomBytes(32).toString('base64url');
+  await db.run('INSERT INTO devices (token_hash, user_id, expires_at) VALUES (?, ?, ?)', sha256(token), userId, expires);
+  res.cookie('device', token, cookieOpts(expires));
+}
+
+async function deviceOf(req) {
+  if (!req.cookies.device) return null;
+  return db.get('SELECT user_id, expires_at FROM devices WHERE token_hash = ? AND expires_at > now()', sha256(req.cookies.device));
+}
+
+// Entrar con Google (o el modo de prueba): dispositivo de confianza + sesión.
+async function signIn(req, res, user) {
+  const until = new Date(Date.now() + REMEMBER_MS);
+  await startSession(req, res, user.id, until);
+  await trustDevice(req, res, user.id, until);
+  res.json({ user: publicUser(user), rememberUntil: until });
 }
 
 app.use(
@@ -225,21 +251,11 @@ app.use(
   wrap(async (req, res, next) => {
     const token = req.cookies.sid;
     if (token) {
-      const row = await db.get(
-        `SELECT u.*, s.expires_at AS session_expires FROM sessions s JOIN users u ON u.id = s.user_id
+      req.user = await db.get(
+        `SELECT u.* FROM sessions s JOIN users u ON u.id = s.user_id
          WHERE s.token_hash = ? AND s.expires_at > now()`,
         sha256(token)
       );
-      if (row) {
-        // Sesión renovable: en un dispositivo que se sigue usando, nunca hay que volver a entrar.
-        // Se renueva como máximo una vez al día para no escribir en cada petición.
-        if (new Date(row.session_expires).getTime() - Date.now() < SESSION_MS - 24 * 60 * 60 * 1000) {
-          await db.run('UPDATE sessions SET expires_at = ? WHERE token_hash = ?', new Date(Date.now() + SESSION_MS), sha256(token));
-          setSessionCookie(res, token);
-        }
-        delete row.session_expires;
-        req.user = row;
-      }
     }
     next();
   })
@@ -321,8 +337,37 @@ app.post(
       name: payload.name || null,
       picture: payload.picture || null,
     });
-    await startSession(res, user.id);
-    res.json({ user: publicUser(user) });
+    await signIn(req, res, user);
+  })
+);
+
+// "Continuar como …": entra directo con el dispositivo de confianza, sin pasar por Google.
+app.post(
+  '/api/auth/device',
+  authLimiter,
+  wrap(async (req, res) => {
+    const d = await deviceOf(req);
+    if (!d) {
+      res.clearCookie('device', { path: '/' });
+      fail(
+        401,
+        `Pasaron más de ${REMEMBER_DAYS} días desde que entraste con Google en este dispositivo. Entra de nuevo con Google.`,
+        `It's been more than ${REMEMBER_DAYS} days since you signed in with Google on this device. Please sign in with Google again.`
+      );
+    }
+    const user = await db.get('SELECT * FROM users WHERE id = ?', d.user_id);
+    await startSession(req, res, user.id, new Date(d.expires_at)); // no alarga el plazo
+    res.json({ user: publicUser(user), rememberUntil: d.expires_at });
+  })
+);
+
+// "Usar otra cuenta de Google": este dispositivo deja de estar recordado.
+app.post(
+  '/api/auth/forget',
+  wrap(async (req, res) => {
+    if (req.cookies.device) await db.run('DELETE FROM devices WHERE token_hash = ?', sha256(req.cookies.device));
+    res.clearCookie('device', { path: '/' });
+    res.json({ ok: true });
   })
 );
 
@@ -334,12 +379,12 @@ if (DEV_LOGIN) {
     wrap(async (req, res) => {
       const mail = email(req.body.email);
       const user = await upsertUser({ email: mail, name: mail.split('@')[0] });
-      await startSession(res, user.id);
-      res.json({ user: publicUser(user) });
+      await signIn(req, res, user);
     })
   );
 }
 
+// "Salir": termina la sesión, pero el dispositivo sigue recordado (para "Continuar como …").
 app.post(
   '/api/auth/logout',
   wrap(async (req, res) => {
@@ -349,7 +394,14 @@ app.post(
   })
 );
 
-app.get('/api/me', (req, res) => res.json({ user: req.user ? publicUser(req.user) : null }));
+app.get(
+  '/api/me',
+  wrap(async (req, res) => {
+    if (!req.user) return res.json({ user: null });
+    const d = await deviceOf(req);
+    res.json({ user: publicUser(req.user), rememberUntil: d && d.user_id === req.user.id ? d.expires_at : null });
+  })
+);
 
 // ---------------------------------------------------------------------------
 // Grupos
