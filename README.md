@@ -48,70 +48,75 @@ GOOGLE_CLIENT_ID=1234567890-abcdefg.apps.googleusercontent.com
 npm start
 ```
 
-Abre <http://localhost:3000>. Sin variables de Turso, los datos se guardan en `data/intercambio.db`.
+Abre <http://localhost:3000>. Sin cadena de conexión, la app usa **PGlite** (un Postgres guardado en `data/pgdata`), así que no necesitas instalar nada. Si prefieres probar contra tu base de Neon o Supabase, pon su cadena en `DATABASE_URL` dentro de `.env`.
 
 **Probar sin Google:** agrega `DEV_LOGIN=true` al `.env` y reinicia. Aparece un campo para entrar con cualquier correo; usa ventanas de incógnito para simular a cada participante. En Vercel este modo se ignora siempre.
 
 ---
 
-## 4. Subirlo a GitLab
+## 4. Subirlo a GitHub (o GitLab)
 
-1. En <https://gitlab.com> → **New project → Create blank project**.
-   - Nombre: `intercambio-navideno`
-   - Visibilidad: **Private**
-   - **Desmarca** "Initialize repository with a README" (el proyecto ya trae uno).
+1. Crea un repositorio **vacío** (sin README ni licencia) en GitHub o GitLab.
 2. En la terminal, dentro de la carpeta del proyecto:
 
 ```bash
-git init --initial-branch=main
+git init
 git add .
 git commit -m "Intercambio navideño"
-git remote add origin https://gitlab.com/TU_USUARIO/intercambio-navideno.git
+git branch -M main
+git remote add origin https://github.com/TU_USUARIO/TU_REPO.git
 git push -u origin main
 ```
 
-- Si pide contraseña, usa un **Personal Access Token** de GitLab, no tu contraseña normal: Avatar → **Edit profile** → **Access** → **Personal access tokens** → **Generate token**, con el permiso `write_repository`. Como usuario pon tu usuario de GitLab.
-- El `.gitignore` ya excluye `.env`, `node_modules/` y `data/`: tus claves y la base de datos local no se suben. Revisa con `git status` antes del primer commit.
+- Si el commit dice *"Please tell me who you are"*: `git config --global user.name "Tu nombre"` y `git config --global user.email "tu@correo.com"`, y repite el commit.
+- Si pide contraseña, usa un **token**, no tu contraseña normal. En GitHub: Settings → Developer settings → Personal access tokens (o usa `gh auth login`). En GitLab: Avatar → Edit profile → Access → Personal access tokens, con permiso `write_repository`.
+- El `.gitignore` ya excluye `.env`, `node_modules/` y `data/`: tus claves y la base local no se suben.
 
 ---
 
-## 5. Crear la base de datos en Turso
+## 5. Elegir la base de datos: Neon (recomendado) o Supabase
 
-Vercel no guarda archivos entre peticiones, así que en producción los datos (incluidas las fotos) viven en **Turso**, una base de datos SQLite en la nube. El plan gratuito alcanza de sobra.
+Vercel no guarda archivos entre peticiones, así que en producción todo (incluidas las fotos) vive en PostgreSQL. La app funciona igual con cualquiera de los dos; las tablas se crean solas la primera vez que alguien la abre.
 
-1. Crea una cuenta en <https://turso.tech> y crea una base de datos (por ejemplo `intercambio`). Si te pide región, elige la más cercana a **Washington D.C. / us-east**, que es donde Vercel corre las funciones por defecto.
-2. En la página de la base de datos copia:
-   - la **URL** (empieza con `libsql://`) → será `TURSO_DATABASE_URL`
-   - un **token** nuevo (Create token, sin expiración) → será `TURSO_AUTH_TOKEN`
+| | Neon (gratis) | Supabase (gratis) |
+|---|---|---|
+| Si nadie entra en días | Se duerme a los 5 min y despierta sola en la siguiente visita | **Se pausa tras 1 semana sin uso** y hay que reactivarla a mano |
+| Espacio | 1 GB por proyecto | 500 MB por proyecto |
+| Certificado SSL | Público, se verifica solo | Propio de Supabase (ver abajo) |
 
-Con la CLI de Turso es lo mismo:
+Para un intercambio, donde la gente entra unos días y luego deja pasar semanas, **Neon** es más cómodo: nunca se queda apagada. Con unas 150 KB por foto, el espacio alcanza para miles de regalos en cualquiera de los dos.
 
-```bash
-turso db create intercambio
-turso db show intercambio --url
-turso db tokens create intercambio
-```
+### Opción A: Neon (lo más fácil)
 
-Las tablas se crean solas la primera vez que alguien abre la app.
+Desde Vercel, después de importar el proyecto (paso 6):
+
+1. En tu proyecto de Vercel → pestaña **Storage** → **Create Database** → **Neon**.
+2. Elige región **US East (Washington D.C.)**, que es donde Vercel corre las funciones por defecto, y conéctala a tu proyecto.
+3. Vercel agrega solo la variable **`DATABASE_URL`** (conexión con pooling). No tienes que copiar nada.
+
+O a mano: crea un proyecto en <https://neon.com> (región AWS us-east), pulsa **Connect**, copia la cadena **con pooling** (el host lleva `-pooler`) y ponla en Vercel como `DATABASE_URL`.
+
+### Opción B: Supabase
+
+1. Crea un proyecto en <https://supabase.com> (región East US). Guarda la contraseña de la base de datos.
+2. Pulsa **Connect** → copia la cadena del **Transaction pooler** (puerto **6543**) y reemplaza `[YOUR-PASSWORD]` por tu contraseña.
+3. Ponla en Vercel como **`POSTGRES_URL`**. Si usas la integración de Supabase en el Marketplace de Vercel, esa variable se agrega sola.
+4. Opcional, para verificar el certificado: en Supabase → Database Settings → SSL Configuration descarga el certificado y pega su contenido completo en una variable **`DATABASE_CA_CERT`**. Sin ella, la conexión va cifrada pero sin verificar el certificado.
+
+La app activa **Row Level Security** en sus tablas: así la API REST pública de Supabase no puede leerlas, ni siquiera con la llave pública del proyecto.
 
 ---
 
-## 6. Publicar en Vercel (desde GitLab)
+## 6. Publicar en Vercel
 
-1. Entra a <https://vercel.com> con tu cuenta de **GitLab** (o conéctala en tu cuenta de Vercel).
-2. **Add New → Project → Import Git Repository**, elige GitLab y el proyecto `intercambio-navideno`. Necesitas rol **Maintainer** en el repositorio.
+1. Entra a <https://vercel.com> con tu cuenta de **GitHub** o **GitLab**.
+2. **Add New → Project → Import Git Repository** y elige tu repositorio.
 3. Vercel detecta **Express** solo. No cambies los comandos de build.
-4. En **Environment Variables** agrega:
-
-   | Nombre | Valor |
-   |---|---|
-   | `GOOGLE_CLIENT_ID` | tu Client ID de Google |
-   | `TURSO_DATABASE_URL` | `libsql://...` |
-   | `TURSO_AUTH_TOKEN` | el token de Turso |
-
-5. **Deploy**. Al terminar, copia la dirección de producción (por ejemplo `https://intercambio-navideno.vercel.app`).
-6. Regresa a Google Cloud → tu cliente → **Authorized JavaScript origins** → agrega esa dirección `https://...vercel.app` (sin `/` al final) y guarda. Puede tardar unos minutos en aplicarse.
-7. Abre la dirección, entra con Google y crea tu primer intercambio.
+4. En **Environment Variables** agrega `GOOGLE_CLIENT_ID` con tu Client ID de Google (y `POSTGRES_URL` si usas Supabase a mano).
+5. **Deploy**. Luego conecta la base de datos (paso 5) y haz **Redeploy** para que tome las variables nuevas.
+6. Copia la dirección de producción (por ejemplo `https://intercambio-navideno.vercel.app`).
+7. Regresa a Google Cloud → tu cliente → **Authorized JavaScript origins** → agrega esa dirección (sin `/` al final) y guarda. Puede tardar unos minutos en aplicarse.
+8. Abre la dirección, entra con Google y crea tu primer intercambio.
 
 **Actualizaciones:** cada `git push` a `main` vuelve a publicar solo. Las ramas generan "previews" con otra dirección; el botón de Google solo funciona en las direcciones que registraste, así que usa la de producción para el grupo.
 
@@ -141,7 +146,7 @@ El organizador puede cambiar nombres y correos en cualquier momento. Para agrega
 - Cookie de sesión `HttpOnly` + `Secure` + `SameSite=Lax`, protección CSRF, CSP estricta y límite de intentos de inicio de sesión.
 - Las fotos se validan por su contenido (JPG, PNG, WEBP o GIF, máx. 4 MB; Vercel acepta hasta 4.5 MB por petición). El navegador las reduce a 1200 px antes de subirlas.
 
-> Nota honesta: quien tenga acceso a la base de datos (tu cuenta de Turso o el archivo `data/intercambio.db`) sí podría leer las asignaciones. Si el organizador administra la base de datos, el grupo tiene que confiar en que no la abrirá.
+> Nota honesta: quien tenga acceso a la base de datos (tu cuenta de Neon/Supabase o la carpeta `data/`) sí podría leer las asignaciones. Si el organizador administra la base de datos, el grupo tiene que confiar en que no la abrirá.
 
 ---
 
@@ -150,7 +155,7 @@ El organizador puede cambiar nombres y correos en cualquier momento. Para agrega
 ```
 intercambio-navideno/
 ├── server.js          # API, inicio de sesión con Google, sorteo, wishlist (exporta la app para Vercel)
-├── db.js              # Turso en la nube o archivo SQLite local
+├── db.js              # PostgreSQL: Neon/Supabase en la nube o PGlite local
 ├── vercel.json        # encabezados de seguridad para los archivos de public/
 ├── public/            # interfaz; en Vercel la sirve su CDN
 │   ├── index.html
@@ -158,7 +163,7 @@ intercambio-navideno/
 │   ├── styles.css
 │   └── fonts/         # Young Serif y Figtree (licencia SIL OFL)
 ├── .env.example
-└── data/              # solo local: se crea solo
+└── data/              # solo local (PGlite): se crea solo
 ```
 
 ### API

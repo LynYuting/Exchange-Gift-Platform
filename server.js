@@ -1,5 +1,5 @@
 // Intercambio navideño — servidor
-// Express + SQLite/Turso + inicio de sesión con Google (Google Identity Services).
+// Express + PostgreSQL (Neon o Supabase) + inicio de sesión con Google (Google Identity Services).
 // Funciona igual en tu computadora (npm start) y en Vercel (función serverless).
 //
 // Regla principal de privacidad: la API nunca envía a quién le toca a otra
@@ -172,8 +172,8 @@ const sha256 = (t) => crypto.createHash('sha256').update(t).digest('hex');
 async function startSession(res, userId) {
   const token = crypto.randomBytes(32).toString('base64url');
   const maxAge = SESSION_DAYS * 24 * 60 * 60 * 1000;
-  await db.run('DELETE FROM sessions WHERE expires_at < ?', Date.now()); // limpieza
-  await db.run('INSERT INTO sessions (token_hash, user_id, expires_at) VALUES (?, ?, ?)', sha256(token), userId, Date.now() + maxAge);
+  await db.run('DELETE FROM sessions WHERE expires_at < now()'); // limpieza
+  await db.run('INSERT INTO sessions (token_hash, user_id, expires_at) VALUES (?, ?, ?)', sha256(token), userId, new Date(Date.now() + maxAge));
   res.cookie('sid', token, { httpOnly: true, sameSite: 'lax', secure: IS_PROD, maxAge, path: '/' });
 }
 
@@ -184,9 +184,8 @@ app.use(
     if (token) {
       req.user = await db.get(
         `SELECT u.* FROM sessions s JOIN users u ON u.id = s.user_id
-         WHERE s.token_hash = ? AND s.expires_at > ?`,
-        sha256(token),
-        Date.now()
+         WHERE s.token_hash = ? AND s.expires_at > now()`,
+        sha256(token)
       );
     }
     next();
@@ -204,9 +203,9 @@ async function upsertUser({ email: mail, sub = null, name = null, picture = null
   await db.run(
     `INSERT INTO users (email, google_sub, google_name, picture) VALUES (?, ?, ?, ?)
      ON CONFLICT(email) DO UPDATE SET
-       google_sub  = COALESCE(excluded.google_sub, google_sub),
-       google_name = COALESCE(excluded.google_name, google_name),
-       picture     = COALESCE(excluded.picture, picture)`,
+       google_sub  = COALESCE(excluded.google_sub, users.google_sub),
+       google_name = COALESCE(excluded.google_name, users.google_name),
+       picture     = COALESCE(excluded.picture, users.picture)`,
     mail,
     sub,
     name,
@@ -219,7 +218,7 @@ async function upsertUser({ email: mail, sub = null, name = null, picture = null
 
 // Marca como "ya entró" a cada participante registrado con este correo.
 async function markJoined(user) {
-  await db.run(`UPDATE members SET joined_at = datetime('now') WHERE email = ? AND joined_at IS NULL`, user.email);
+  await db.run('UPDATE members SET joined_at = now() WHERE email = ? AND joined_at IS NULL', user.email);
 }
 
 const publicUser = (u) => ({ email: u.email, name: u.google_name, picture: u.picture });
@@ -365,9 +364,9 @@ app.post(
     });
 
     const groupId = await db.transaction(async (tx) => {
-      const { lastInsertRowid } = await tx.run(
+      const { id } = await tx.get(
         `INSERT INTO gift_groups (name, description, budget, currency, event_date, organizer_id)
-         VALUES (?, ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?) RETURNING id`,
         name,
         description,
         budget,
@@ -376,12 +375,12 @@ app.post(
         req.user.id
       );
       for (const p of participants) {
-        await tx.run('INSERT INTO members (group_id, display_name, email) VALUES (?, ?, ?)', lastInsertRowid, p.name, p.email);
+        await tx.run('INSERT INTO members (group_id, display_name, email) VALUES (?, ?, ?)', id, p.name, p.email);
       }
-      return lastInsertRowid;
+      return id;
     });
     await db.run(
-      `UPDATE members SET joined_at = datetime('now')
+      `UPDATE members SET joined_at = now()
        WHERE group_id = ? AND joined_at IS NULL AND email IN (SELECT email FROM users)`,
       groupId
     );
@@ -396,7 +395,7 @@ app.get(
     const { g, me, isOrganizer } = await groupAccess(idParam(req.params.id), req.user);
     const members = await db.all(
       `SELECT id, display_name, email, joined_at FROM members
-       WHERE group_id = ? ORDER BY display_name COLLATE NOCASE, id`,
+       WHERE group_id = ? ORDER BY lower(display_name), id`,
       g.id
     );
     const organizer = await db.get('SELECT email, google_name FROM users WHERE id = ?', g.organizer_id);
@@ -486,7 +485,7 @@ app.post(
     requireNotDrawn(a.g);
     const name = str(req.body.name, 'el nombre', { max: 60, required: true });
     const mail = email(req.body.email);
-    const { n } = await db.get('SELECT COUNT(*) AS n FROM members WHERE group_id = ?', a.g.id);
+    const { n } = await db.get('SELECT COUNT(*)::int AS n FROM members WHERE group_id = ?', a.g.id);
     if (n >= MAX_MEMBERS) fail(400, `Máximo ${MAX_MEMBERS} participantes por grupo.`);
     if (await db.get('SELECT 1 FROM members WHERE group_id = ? AND email = ?', a.g.id, mail)) {
       fail(409, `El correo ${mail} ya está en este grupo.`);
@@ -494,11 +493,11 @@ app.post(
     const joined = !!(await db.get('SELECT 1 FROM users WHERE email = ?', mail));
     await db.run(
       `INSERT INTO members (group_id, display_name, email, joined_at)
-       VALUES (?, ?, ?, CASE WHEN ? THEN datetime('now') END)`,
+       VALUES (?, ?, ?, CASE WHEN ? THEN now() END)`,
       a.g.id,
       name,
       mail,
-      joined ? 1 : 0
+      joined
     );
     res.status(201).json({ ok: true });
   })
@@ -520,10 +519,10 @@ app.patch(
       }
       const joined = !!(await db.get('SELECT 1 FROM users WHERE email = ?', mail));
       await db.run(
-        `UPDATE members SET display_name = ?, email = ?, joined_at = CASE WHEN ? THEN datetime('now') END WHERE id = ?`,
+        `UPDATE members SET display_name = ?, email = ?, joined_at = CASE WHEN ? THEN now() END WHERE id = ?`,
         name,
         mail,
-        joined ? 1 : 0,
+        joined,
         m.id
       );
     } else {
@@ -571,14 +570,14 @@ app.post(
     requireOrganizer(a);
     await db.transaction(async (tx) => {
       // Se vuelve a leer dentro de la transacción para evitar dos sorteos a la vez.
-      const g = await tx.get('SELECT drawn_at FROM gift_groups WHERE id = ?', a.g.id);
+      const g = await tx.get('SELECT drawn_at FROM gift_groups WHERE id = ? FOR UPDATE', a.g.id);
       if (g.drawn_at) fail(409, 'El sorteo ya se hizo.');
       const ids = (await tx.all('SELECT id FROM members WHERE group_id = ?', a.g.id)).map((r) => r.id);
       if (ids.length < 3) fail(400, 'Se necesitan al menos 3 participantes para sortear.');
       for (const [giver, receiver] of drawCircle(ids)) {
         await tx.run('UPDATE members SET receiver_id = ? WHERE id = ?', receiver, giver);
       }
-      await tx.run(`UPDATE gift_groups SET drawn_at = datetime('now') WHERE id = ?`, a.g.id);
+      await tx.run('UPDATE gift_groups SET drawn_at = now() WHERE id = ?', a.g.id);
     });
     res.json({ ok: true });
   })
@@ -619,7 +618,7 @@ function sniffImage(buf) {
 function readPhoto(file) {
   const mime = sniffImage(file.buffer);
   if (!mime) fail(400, 'La foto debe ser JPG, PNG, WEBP o GIF.');
-  return { mime, data: new Uint8Array(file.buffer), ver: crypto.randomBytes(4).toString('hex') };
+  return { mime, data: Buffer.from(file.buffer), ver: crypto.randomBytes(4).toString('hex') };
 }
 
 function itemFields(body) {
@@ -658,7 +657,7 @@ app.post(
     const { me } = await groupAccess(idParam(req.params.id), req.user);
     if (!me) fail(403, 'No participas en este intercambio, así que no tienes wishlist aquí.');
     const f = itemFields(req.body || {});
-    const { n } = await db.get('SELECT COUNT(*) AS n FROM wishlist_items WHERE member_id = ?', me.id);
+    const { n } = await db.get('SELECT COUNT(*)::int AS n FROM wishlist_items WHERE member_id = ?', me.id);
     if (n >= MAX_ITEMS) fail(400, `Máximo ${MAX_ITEMS} regalos en tu wishlist.`);
     const photo = req.file ? readPhoto(req.file) : null;
     await db.run(
