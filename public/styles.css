@@ -165,7 +165,8 @@ textarea.input { min-height: 72px; resize: vertical; }
 .user-box .btn-text { color: var(--nieve); font-size: 13px; }
 
 .main { padding: clamp(20px, 4vw, 48px); min-width: 0; }
-.main-inner { max-width: 900px; display: flex; flex-direction: column; gap: 40px; }
+/* .main-inner { max-width: 900px; display: flex; flex-direction: column; gap: 40px; } */
+.main-inner { max-width: 1080px; margin: 0 auto; display: flex; flex-direction: column; gap: 40px; }
 
 /* ---------- Encabezado del grupo ---------- */
 .group-head h1 { font-size: clamp(32px, 4.5vw, 46px); }
