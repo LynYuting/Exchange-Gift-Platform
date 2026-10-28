@@ -1,0 +1,26 @@
+{
+  "name": "intercambio-navideno",
+  "version": "1.0.0",
+  "description": "Plataforma de intercambio de regalos navideños con inicio de sesión de Google, sorteo secreto y wishlists.",
+  "main": "server.js",
+  "type": "commonjs",
+  "private": true,
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@libsql/client": "^0.18.0",
+    "cookie-parser": "^1.4.7",
+    "dotenv": "^18.0.9",
+    "express": "^4.22.3",
+    "express-rate-limit": "^8.7.1",
+    "google-auth-library": "^11.3.1",
+    "helmet": "^8.3.0",
+    "multer": "^2.5.0"
+  }
+}
