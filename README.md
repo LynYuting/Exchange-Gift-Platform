@@ -11,6 +11,8 @@ Plataforma sencilla para organizar intercambios de regalos.
 - **Nadie ve las asignaciones de los demás, ni el organizador.** El servidor nunca las envía.
 - Cada quien arma su **wishlist** (nombre, costo, link y foto) **ordenada por preferencia**. Solo la ve la persona a la que le tocó regalarle, y cada quien ve la wishlist de su asignado.
 - El organizador administra todo desde una ventana: enlace, participantes, sorteo y datos del evento.
+- **Español / inglés:** el interruptor **ES · EN** (en la entrada y en la barra lateral) cambia toda la interfaz, las fechas, los mensajes del servidor y el botón de Google. Se recuerda en cada dispositivo.
+- **No hay que volver a entrar:** la sesión dura 180 días y se renueva sola mientras se use. Si la sesión se vence, la pantalla de entrada recuerda la cuenta (“Continuar como…” o “Usar otra cuenta de Google”) y Google puede entrar solo, salvo que hayas pulsado **Salir**.
 
 ---
 
@@ -123,6 +125,8 @@ La app activa **Row Level Security** en sus tablas: así la API REST pública de
 
 **Actualizaciones:** cada `git push` a `main` vuelve a publicar solo. Las ramas generan "previews" con otra dirección; el botón de Google solo funciona en las direcciones que registraste, así que usa la de producción para el grupo.
 
+**Error 401 en otro dispositivo:** Vercel protege por defecto todas sus direcciones *excepto la de producción* (Deployment Protection) y pide iniciar sesión en Vercel. En tu computadora no lo notas porque ya estás dentro de Vercel; en el teléfono sale **401**. Usa siempre la dirección de producción (la de **Settings → Domains**, p. ej. `https://exchange-gift-platform.vercel.app`), no las que terminan en `-xxxx-tuusuario.vercel.app`. La app ya ayuda: los enlaces de invitación siempre usan la dirección de producción (sale sola de `VERCEL_PROJECT_PRODUCTION_URL`, o de `PUBLIC_URL` si la defines) y, si abres otra dirección de Vercel, te pasa a la principal.
+
 **Si cambias una variable de entorno** en Vercel, haz **Redeploy** para que tome efecto.
 
 ---
@@ -169,7 +173,10 @@ intercambio-navideno/
 ├── public/            # interfaz; en Vercel la sirve su CDN
 │   ├── index.html
 │   ├── app.js
+│   ├── i18n.js        # textos en inglés (la clave es el texto en español)
 │   ├── styles.css
+│   ├── privacidad.html, terminos.html   # páginas legales en español
+│   ├── privacy.html, terms.html         # y en inglés
 │   └── fonts/         # Young Serif y Figtree (licencia SIL OFL)
 ├── .env.example
 └── data/              # solo local (PGlite): se crea solo

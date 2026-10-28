@@ -6,6 +6,37 @@
   const state = { config: null, user: null, groups: [], detail: null, $side: null, $main: null };
 
   // -------------------------------------------------------------------------
+  // Idioma (español / inglés). Las traducciones están en i18n.js; la clave es el texto en español.
+  // -------------------------------------------------------------------------
+  const LANGS = ['es', 'en'];
+  let lang = (() => {
+    try {
+      const saved = localStorage.getItem('idioma');
+      if (LANGS.includes(saved)) return saved;
+    } catch {
+      /* sin almacenamiento */
+    }
+    return 'es';
+  })();
+  document.documentElement.lang = lang;
+  const missing = new Set();
+  /** t('Hola, {name}', { name }) → texto en el idioma actual. */
+  function t(es, vars) {
+    let out = es;
+    if (lang === 'en') {
+      const en = window.I18N_EN && window.I18N_EN[es];
+      if (en === undefined) {
+        if (!missing.has(es)) {
+          missing.add(es);
+          console.warn('[i18n] Falta traducción:', es);
+        }
+      } else out = en;
+    }
+    return vars ? out.replace(/\{(\w+)\}/g, (m, k) => (k in vars ? String(vars[k]) : m)) : out;
+  }
+  const locale = () => (lang === 'en' ? 'en-US' : 'es-MX');
+
+  // -------------------------------------------------------------------------
   // Utilidades
   // -------------------------------------------------------------------------
   /** Crea elementos sin usar innerHTML con datos del usuario. */
@@ -46,7 +77,7 @@
     '<svg width="28" height="22" viewBox="0 0 32 26" aria-hidden="true"><path d="M9 1h22v24H9L1 13z" fill="#C21F3A"/><circle cx="9" cy="13" r="2.6" fill="#17392F"/></svg>';
 
   async function api(path, { method = 'GET', body, form } = {}) {
-    const opts = { method, headers: {}, credentials: 'same-origin' };
+    const opts = { method, headers: { 'X-Lang': lang }, credentials: 'same-origin' };
     if (method !== 'GET') opts.headers['X-Requested-With'] = 'intercambio';
     if (form) opts.body = form;
     else if (body !== undefined) {
@@ -57,16 +88,16 @@
     try {
       res = await fetch(path, opts);
     } catch {
-      throw new Error('No hay conexión con el servidor. Revisa tu internet e intenta de nuevo.');
+      throw new Error(t('No hay conexión con el servidor. Revisa tu internet e intenta de nuevo.'));
     }
     const data = await res.json().catch(() => ({}));
     if (res.status === 401 && path !== '/api/me' && state.user) {
       state.user = null;
       setSessionHint(false);
-      renderLogin('Tu sesión terminó. Vuelve a entrar.');
+      renderLogin(t('Tu sesión terminó. Vuelve a entrar.'));
     }
     if (!res.ok) {
-      const err = new Error(data.error || 'Algo falló. Intenta de nuevo.');
+      const err = new Error(data.error || t('Algo falló. Intenta de nuevo.'));
       err.status = res.status;
       throw err;
     }
@@ -75,46 +106,44 @@
 
   const fmtMoney = (n, cur = 'MXN') => {
     if (n === null || n === undefined) return '';
-    const s = new Intl.NumberFormat('es-MX', {
-      style: 'currency',
-      currency: cur,
-      minimumFractionDigits: Number.isInteger(n) ? 0 : 2,
-      maximumFractionDigits: 2,
-    }).format(n);
-    return cur === 'MXN' ? `${s} MXN` : s;
+    const digits = { minimumFractionDigits: Number.isInteger(n) ? 0 : 2, maximumFractionDigits: 2 };
+    // Pesos siempre como "$500 MXN" (en inglés Intl escribiría "MX$500").
+    if (cur === 'MXN') return `$${new Intl.NumberFormat(locale(), digits).format(n)} MXN`;
+    return new Intl.NumberFormat(locale(), { style: 'currency', currency: cur, ...digits }).format(n);
   };
   const parseDate = (s) => {
     const [y, m, d] = s.split('-').map(Number);
     return new Date(y, m - 1, d);
   };
   const fmtDate = (s) =>
-    parseDate(s).toLocaleDateString('es-MX', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
-  const fmtShort = (s) => parseDate(s).toLocaleDateString('es-MX', { day: 'numeric', month: 'short' });
+    parseDate(s).toLocaleDateString(locale(), { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+  const fmtShort = (s) => parseDate(s).toLocaleDateString(locale(), { day: 'numeric', month: 'short' });
   function countdown(s) {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     const n = Math.round((parseDate(s) - today) / 864e5);
-    if (n > 1) return `faltan ${n} días`;
-    if (n === 1) return 'es mañana';
-    if (n === 0) return 'es hoy';
-    return 'ya pasó';
+    if (n > 1) return t('faltan {n} días', { n });
+    if (n === 1) return t('es mañana');
+    if (n === 0) return t('es hoy');
+    return t('ya pasó');
   }
   const hostOf = (url) => {
     try {
       return new URL(url).hostname.replace(/^www\./, '');
     } catch {
-      return 'la tienda';
+      return t('la tienda');
     }
   };
   const initial = (s) => (s || '?').trim().charAt(0).toUpperCase();
 
-  const inviteUrl = (token) => `${location.origin}/#/unirse/${token}`;
+  // Siempre con la dirección principal: las otras direcciones de Vercel piden cuenta de Vercel (401).
+  const inviteUrl = (token) => `${(state.config && state.config.publicUrl) || location.origin}/#/unirse/${token}`;
   async function copyText(text, okMsg) {
     try {
       await navigator.clipboard.writeText(text);
       toast(okMsg);
     } catch {
-      toast('No se pudo copiar automáticamente. Intenta de nuevo.', 'error');
+      toast(t('No se pudo copiar automáticamente. Intenta de nuevo.'), 'error');
     }
   }
 
@@ -128,7 +157,7 @@
     setTimeout(() => t.remove(), kind === 'error' ? 5000 : 3000);
   }
 
-  function confirmDialog({ title, text, confirm = 'Confirmar', danger = false }) {
+  function confirmDialog({ title, text, confirm = t('Confirmar'), danger = false }) {
     return new Promise((resolve) => {
       const dlg = h(
         'dialog',
@@ -138,7 +167,7 @@
         h(
           'div',
           { class: 'dialog-actions' },
-          h('button', { class: 'btn btn-ghost', type: 'button', onclick: () => dlg.close('no') }, 'Cancelar'),
+          h('button', { class: 'btn btn-ghost', type: 'button', onclick: () => dlg.close('no') }, t('Cancelar')),
           h('button', { class: `btn ${danger ? 'btn-red' : ''}`, type: 'button', onclick: () => dlg.close('yes') }, confirm)
         )
       );
@@ -156,7 +185,7 @@
       'dialog',
       { class: 'photo-viewer', 'aria-label': caption },
       h('figure', {}, h('img', { src, alt: caption }), h('figcaption', {}, caption)),
-      h('button', { class: 'photo-close', type: 'button', 'aria-label': 'Cerrar foto', onclick: () => dlg.close() }, svg(ICON_X))
+      h('button', { class: 'photo-close', type: 'button', 'aria-label': t('Cerrar foto'), onclick: () => dlg.close() }, svg(ICON_X))
     );
     dlg.addEventListener('close', () => dlg.remove());
     // Clic fuera de la foto la cierra.
@@ -197,7 +226,7 @@
   function busy(btn, on, text) {
     if (on) {
       btn.dataset.label = btn.textContent;
-      btn.textContent = text || 'Guardando…';
+      btn.textContent = text || t('Guardando…');
       btn.disabled = true;
     } else {
       btn.textContent = btn.dataset.label || btn.textContent;
@@ -257,8 +286,8 @@
     const body = single
       ? [h('p', { class: 'tag-name', style: 'border:0' }, single)]
       : [
-          h('div', { class: 'tag-line' }, h('span', { class: 'tag-label' }, 'De:'), h('span', { class: 'tag-name' }, from)),
-          h('div', { class: 'tag-line para' }, h('span', { class: 'tag-label' }, 'Para:'), h('span', { class: 'tag-name' }, to)),
+          h('div', { class: 'tag-line' }, h('span', { class: 'tag-label' }, t('De:')), h('span', { class: 'tag-name' }, from)),
+          h('div', { class: 'tag-line para' }, h('span', { class: 'tag-label' }, t('Para:')), h('span', { class: 'tag-name' }, to)),
         ];
     return h(
       'div',
@@ -271,34 +300,64 @@
   // -------------------------------------------------------------------------
   // Inicio de sesión
   // -------------------------------------------------------------------------
+  let gsiPromise = null;
   function loadGoogleScript() {
-    return new Promise((resolve, reject) => {
-      if (window.google && window.google.accounts && window.google.accounts.id) return resolve();
-      const s = document.createElement('script');
-      s.src = 'https://accounts.google.com/gsi/client';
-      s.async = true;
-      s.onload = resolve;
-      s.onerror = () => reject(new Error('No se pudo cargar el inicio de sesión de Google.'));
-      document.head.append(s);
-    });
+    if (!gsiPromise) {
+      gsiPromise = new Promise((resolve, reject) => {
+        if (window.google && window.google.accounts && window.google.accounts.id) return resolve();
+        const s = document.createElement('script');
+        s.src = `https://accounts.google.com/gsi/client?hl=${lang}`;
+        s.async = true;
+        s.onload = resolve;
+        s.onerror = () => {
+          gsiPromise = null; // permite reintentar
+          s.remove();
+          reject(new Error(t('No se pudo cargar el inicio de sesión de Google.')));
+        };
+        document.head.append(s);
+      });
+    }
+    return gsiPromise;
+  }
+
+  // Cuenta recordada en este dispositivo: permite "Continuar como …" sin escribir nada.
+  const ACCOUNT_KEY = 'cuenta';
+  const SIGNED_OUT = 'salio'; // tras "Salir" no se vuelve a entrar sola
+  function rememberedAccount() {
+    try {
+      const a = JSON.parse(storage.get(ACCOUNT_KEY) || 'null');
+      return a && a.email ? a : null;
+    } catch {
+      return null;
+    }
+  }
+  function forgetAccount() {
+    storage.remove(ACCOUNT_KEY);
+    storage.remove(SIGNED_OUT);
+    if (window.google && window.google.accounts) window.google.accounts.id.disableAutoSelect();
   }
 
   function onLoggedIn(user) {
     setSessionHint(true);
+    storage.set(ACCOUNT_KEY, JSON.stringify({ email: user.email, name: user.name || '', picture: user.picture || '' }));
+    storage.remove(SIGNED_OUT);
     state.user = user;
     startApp();
   }
 
   // Monta el botón de Google sin mostrar el recuadro vacío que dibuja mientras carga:
   // queda oculto (con un marcador gris en su lugar) hasta que su iframe termina de cargar.
-  function mountGoogleButton(slot, clientId, err) {
+  function mountGoogleButton(slot, clientId, err, { hint = null, auto = false } = {}) {
     loadGoogleScript()
       .then(() => {
         if (!slot.isConnected) return;
         window.google.accounts.id.initialize({
           client_id: clientId,
           ux_mode: 'popup',
-          auto_select: false,
+          // En un dispositivo ya usado (y sin haber pulsado "Salir"), Google puede entrar solo.
+          auto_select: auto,
+          login_hint: hint || undefined,
+          itp_support: true,
           callback: async (resp) => {
             err.textContent = '';
             try {
@@ -331,8 +390,8 @@
           theme: 'filled_black',
           size: 'large',
           shape: 'pill',
-          text: 'signin_with',
-          locale: 'es-419',
+          text: hint ? 'continue_with' : 'signin_with',
+          locale: lang === 'en' ? 'en' : 'es-419',
           width: 280,
         });
         const frame = host.querySelector('iframe');
@@ -344,6 +403,7 @@
           obs.disconnect();
           reveal(); // por si el iframe nunca avisa
         }, 3000);
+        if (auto) window.google.accounts.id.prompt();
       })
       .catch((e) => {
         slot.remove();
@@ -352,11 +412,11 @@
   }
 
   function devLoginForm(err) {
-    const input = h('input', { class: 'input', type: 'email', placeholder: 'correo@ejemplo.com', required: true, 'aria-label': 'Correo de prueba' });
+    const input = h('input', { class: 'input', type: 'email', placeholder: 'correo@ejemplo.com', required: true, 'aria-label': t('Correo de prueba') });
     return h(
       'div',
       { class: 'dev-login' },
-      h('p', {}, 'Modo de prueba (DEV_LOGIN): entra con cualquier correo, sin Google.'),
+      h('p', {}, t('Modo de prueba (DEV_LOGIN): entra con cualquier correo, sin Google.')),
       h(
         'form',
         {
@@ -371,26 +431,57 @@
           },
         },
         input,
-        h('button', { class: 'btn', type: 'submit' }, 'Entrar')
+        h('button', { class: 'btn', type: 'submit' }, t('Entrar'))
       )
     );
   }
 
   function renderLogin(message) {
-    document.title = 'Intercambio navideño';
+    document.title = t('Intercambio navideño');
     const err = h('p', { class: 'form-error', role: 'alert' }, message || '');
     const slot = h('div', { class: 'gsi-slot', 'aria-busy': 'true' }, h('span', { class: 'gsi-placeholder', 'aria-hidden': 'true' }));
     const devBox = h('div');
-    const actions = h('div', { class: 'login-actions' }, slot, devBox, err);
+    const acct = rememberedAccount();
+    const actions = h(
+      'div',
+      { class: 'login-actions' },
+      acct
+        ? h(
+            'div',
+            { class: 'remembered' },
+            h('div', { class: 'avatar' }, acct.picture ? h('img', { src: acct.picture, alt: '', referrerpolicy: 'no-referrer' }) : initial(acct.name || acct.email)),
+            h('div', { class: 'who' }, h('strong', {}, t('Hola de nuevo, {name}', { name: acct.name || acct.email.split('@')[0] })), h('span', {}, acct.email))
+          )
+        : null,
+      slot,
+      acct
+        ? h(
+            'button',
+            {
+              class: 'btn-text',
+              type: 'button',
+              onclick: () => {
+                forgetAccount();
+                renderLogin();
+              },
+            },
+            t('Usar otra cuenta de Google')
+          )
+        : null,
+      devBox,
+      err
+    );
 
     getConfig()
       .then((cfg) => {
         if (!slot.isConnected) return; // ya cambió de pantalla
         if (cfg.devLogin) devBox.replaceWith(devLoginForm(err));
-        if (cfg.googleClientId) mountGoogleButton(slot, cfg.googleClientId, err);
+        if (cfg.googleClientId) {
+          mountGoogleButton(slot, cfg.googleClientId, err, { hint: acct && acct.email, auto: !!acct && storage.get(SIGNED_OUT) !== '1' });
+        }
         else {
           slot.remove();
-          if (!cfg.devLogin) err.textContent = 'El servidor no tiene configurado GOOGLE_CLIENT_ID. Revisa las variables de entorno.';
+          if (!cfg.devLogin) err.textContent = t('El servidor no tiene configurado GOOGLE_CLIENT_ID. Revisa las variables de entorno.');
         }
       })
       .catch((e) => {
@@ -402,12 +493,12 @@
     const r = currentRoute();
     let banner = null;
     if (r.name === 'join') {
-      banner = h('div', { class: 'invite-banner' }, 'Revisando tu invitación…');
+      banner = h('div', { class: 'invite-banner' }, t('Revisando tu invitación…'));
       api(`/api/invites/${r.token}`)
         .then((inv) =>
           banner.replaceChildren(
-            h('strong', {}, `${inv.organizerName} te invitó a “${inv.groupName}”`),
-            h('span', {}, 'Entra con la cuenta de Google que quieras usar y después elige tu nombre de la lista.')
+            h('strong', {}, t('{org} te invitó a “{group}”', { org: inv.organizerName, group: inv.groupName })),
+            h('span', {}, t('Entra con la cuenta de Google que quieras usar y después elige tu nombre de la lista.'))
           )
         )
         .catch((e) => banner.replaceChildren(h('span', {}, e.message)));
@@ -420,20 +511,37 @@
         h(
           'section',
           { class: 'login-copy' },
-          h('h1', {}, 'Intercambio navideño'),
-          h('p', {}, 'Entra con tu cuenta de Google para ver a quién le regalas y qué le gustaría recibir.'),
+          h('h1', {}, t('Intercambio navideño')),
+          h('p', {}, t('Entra con tu cuenta de Google para ver a quién le regalas y qué le gustaría recibir.')),
           banner,
           actions,
           h(
             'p',
             { class: 'legal-links' },
-            h('a', { href: '/privacidad.html' }, 'Política de privacidad'),
-            h('a', { href: '/terminos.html' }, 'Términos de servicio')
+            h('a', { href: lang === 'en' ? '/privacy.html' : '/privacidad.html' }, t('Política de privacidad')),
+            h('a', { href: lang === 'en' ? '/terms.html' : '/terminos.html' }, t('Términos de servicio'))
           )
         ),
-        h('div', { class: 'login-art', 'aria-hidden': 'true' }, giftTag({ from: 'Tú', to: '***' }))
+        h('div', { class: 'login-art', 'aria-hidden': 'true' }, giftTag({ from: t('Tú'), to: '***' })),
+        langSwitch()
       )
     );
+  }
+
+  // Interruptor ES / EN. Cambia todo al momento y se recuerda en este dispositivo.
+  function langSwitch() {
+    const opt = (code, label, name) =>
+      h('button', { type: 'button', class: 'lang-opt', lang: code, title: name, 'aria-pressed': String(lang === code), onclick: () => setLang(code) }, label);
+    return h('div', { class: 'lang-switch', role: 'group', 'aria-label': t('Idioma') }, opt('es', 'ES', 'Español'), opt('en', 'EN', 'English'));
+  }
+
+  function setLang(code) {
+    if (!LANGS.includes(code) || code === lang) return;
+    lang = code;
+    document.documentElement.lang = code;
+    storage.set('idioma', code);
+    if (state.user && state.$side) route(); // vuelve a dibujar la barra, la página y el panel si está abierto
+    else renderLogin();
   }
 
   async function logout() {
@@ -443,6 +551,7 @@
       /* igual cerramos */
     }
     if (window.google && window.google.accounts) window.google.accounts.id.disableAutoSelect();
+    storage.set(SIGNED_OUT, '1');
     setSessionHint(false);
     state.user = null;
     state.groups = [];
@@ -455,7 +564,7 @@
   // Estructura y navegación
   // -------------------------------------------------------------------------
   async function startApp() {
-    state.$side = h('aside', { class: 'side', 'aria-label': 'Tus intercambios' });
+    state.$side = h('aside', { class: 'side', 'aria-label': t('Tus intercambios') });
     state.$main = h('div', { class: 'main-inner', id: 'main' });
     $app.replaceChildren(h('div', { class: 'shell' }, state.$side, h('main', { class: 'main' }, state.$main)));
     try {
@@ -503,7 +612,7 @@
           'ul',
           { class: 'group-list' },
           state.groups.map((g) => {
-            const sub = [g.eventDate ? fmtShort(g.eventDate) : null, g.isOrganizer ? 'organizas' : null].filter(Boolean).join(', ');
+            const sub = [g.eventDate ? fmtShort(g.eventDate) : null, g.isOrganizer ? t('organizas') : null].filter(Boolean).join(', ');
             return h(
               'li',
               {},
@@ -516,37 +625,38 @@
             );
           })
         )
-      : h('p', { class: 'side-empty' }, 'Todavía no tienes intercambios.');
+      : h('p', { class: 'side-empty' }, t('Todavía no tienes intercambios.'));
 
     state.$side.replaceChildren(
       h(
         'div',
         { class: 'side-top' },
-        h('div', { class: 'brand' }, svg(BRAND_TAG), 'Intercambio'),
+        h('div', { class: 'brand' }, svg(BRAND_TAG), h('span', { class: 'brand-name' }, t('Intercambio'))),
         h(
           'div',
           { class: 'user-box' },
           h('div', { class: 'avatar' }, u.picture ? h('img', { src: u.picture, alt: '', referrerpolicy: 'no-referrer' }) : initial(u.name || u.email)),
           h('div', { class: 'who' }, h('span', {}, u.name || u.email.split('@')[0]), h('span', { class: 'email' }, u.email)),
-          h('button', { class: 'btn-text', type: 'button', onclick: logout }, 'Salir')
-        )
+          h('button', { class: 'btn-text', type: 'button', onclick: logout }, t('Salir'))
+        ),
+        langSwitch()
       ),
-      h('h2', {}, 'Tus intercambios'),
+      h('h2', {}, t('Tus intercambios')),
       list,
-      h('a', { class: 'btn btn-new', href: '#/nuevo' }, '+ Crear intercambio')
+      h('a', { class: 'btn btn-new', href: '#/nuevo' }, t('+ Crear intercambio'))
     );
   }
 
   function renderWelcome() {
-    document.title = 'Intercambio navideño';
+    document.title = t('Intercambio navideño');
     state.$main.replaceChildren(
       h(
         'section',
         { class: 'welcome' },
-        h('h1', {}, 'Aún no estás en ningún intercambio'),
-        h('p', {}, 'Si alguien te invitó, abre el enlace que te mandó y elige tu nombre.'),
-        h('p', {}, 'O crea uno y comparte el enlace con tu grupo.'),
-        h('div', {}, h('a', { class: 'btn', href: '#/nuevo' }, 'Crear intercambio'))
+        h('h1', {}, t('Aún no estás en ningún intercambio')),
+        h('p', {}, t('Si alguien te invitó, abre el enlace que te mandó y elige tu nombre.')),
+        h('p', {}, t('O crea uno y comparte el enlace con tu grupo.')),
+        h('div', {}, h('a', { class: 'btn', href: '#/nuevo' }, t('Crear intercambio')))
       )
     );
   }
@@ -554,41 +664,41 @@
   // Pantalla a la que llega alguien con el enlace del grupo (#/unirse/TOKEN):
   // elige su nombre de la lista que escribió el organizador.
   async function renderJoin(token) {
-    document.title = 'Invitación · Intercambio navideño';
+    document.title = `${t('Invitación')} · ${t('Intercambio navideño')}`;
     state.detail = null;
-    state.$main.replaceChildren(h('p', { class: 'loading' }, 'Revisando tu invitación…'));
+    state.$main.replaceChildren(h('p', { class: 'loading' }, t('Revisando tu invitación…')));
     const message = (title, ...body) =>
       state.$main.replaceChildren(h('section', { class: 'welcome join' }, h('h1', {}, title), ...body));
     let inv;
     try {
       inv = await api(`/api/invites/${token}`);
     } catch (e) {
-      return message('Este enlace ya no sirve', h('p', {}, e.message), h('div', {}, h('a', { class: 'btn btn-ghost', href: '#/' }, 'Ir a mis intercambios')));
+      return message(t('Este enlace ya no sirve'), h('p', {}, e.message), h('div', {}, h('a', { class: 'btn btn-ghost', href: '#/' }, t('Ir a mis intercambios'))));
     }
     if (inv.myName) {
-      toast(`Ya estás en “${inv.groupName}” como ${inv.myName}`);
+      toast(t('Ya estás en “{group}” como {name}', { group: inv.groupName, name: inv.myName }));
       return location.replace(`#/g/${inv.groupId}`);
     }
     if (!inv.names.some((n) => !n.taken && !n.reserved)) {
       return message(
-        'Ya no quedan nombres por elegir',
-        h('p', {}, `Todos los nombres de “${inv.groupName}” ya fueron elegidos. Si falta el tuyo, pídele a ${inv.organizerName} que te agregue.`),
-        h('div', {}, h('a', { class: 'btn btn-ghost', href: '#/' }, 'Ir a mis intercambios'))
+        t('Ya no quedan nombres por elegir'),
+        h('p', {}, t('Todos los nombres de “{group}” ya fueron elegidos. Si falta el tuyo, pídele a {org} que te agregue.', { group: inv.groupName, org: inv.organizerName })),
+        h('div', {}, h('a', { class: 'btn btn-ghost', href: '#/' }, t('Ir a mis intercambios')))
       );
     }
 
     const choose = async (n, btn) => {
       const ok = await confirmDialog({
-        title: `¿Eres ${n.name}?`,
-        text: `Tu cuenta ${state.user.email} quedará ligada a este nombre y no podrás cambiarlo tú. Si te equivocas, solo ${inv.organizerName} puede corregirlo.`,
-        confirm: `Sí, soy ${n.name}`,
+        title: t('¿Eres {name}?', { name: n.name }),
+        text: t('Tu cuenta {email} quedará ligada a este nombre y no podrás cambiarlo tú. Si te equivocas, solo {org} puede corregirlo.', { email: state.user.email, org: inv.organizerName }),
+        confirm: t('Sí, soy {name}', { name: n.name }),
       });
       if (!ok) return;
       btn.disabled = true;
       try {
         await api(`/api/invites/${token}/claim`, { method: 'POST', body: { memberId: n.id } });
         await loadGroups();
-        toast(`¡Listo, ${n.name}! Ya estás en “${inv.groupName}”`);
+        toast(t('¡Listo, {name}! Ya estás en “{group}”', { name: n.name, group: inv.groupName }));
         location.hash = `#/g/${inv.groupId}`;
       } catch (e) {
         toast(e.message, 'error');
@@ -597,8 +707,8 @@
     };
 
     message(
-      `Te invitaron a “${inv.groupName}”`,
-      h('p', {}, `${inv.organizerName} organiza este intercambio. Elige tu nombre: cada nombre se puede elegir una sola vez.`),
+      t('Te invitaron a “{group}”', { group: inv.groupName }),
+      h('p', {}, t('{org} organiza este intercambio. Elige tu nombre: cada nombre se puede elegir una sola vez.', { org: inv.organizerName })),
       h(
         'ul',
         { class: 'name-picker' },
@@ -607,13 +717,13 @@
             'button',
             { class: `name-tag${n.reserved ? ' reserved' : ''}`, type: 'button', disabled: n.taken || n.reserved },
             h('span', { class: 'name-tag-name' }, n.name),
-            h('span', { class: 'name-tag-status' }, n.taken ? 'Ya lo eligieron' : n.reserved ? 'Reservado para otra cuenta' : 'Soy yo')
+            h('span', { class: 'name-tag-status' }, n.taken ? t('Ya lo eligieron') : n.reserved ? t('Reservado para otra cuenta') : t('Soy yo'))
           );
           if (!n.taken && !n.reserved) btn.addEventListener('click', () => choose(n, btn));
           return h('li', {}, btn);
         })
       ),
-      h('p', { class: 'join-foot' }, `Si tu nombre no aparece, está reservado para otra cuenta o alguien ya eligió el tuyo, avísale a ${inv.organizerName}.`)
+      h('p', { class: 'join-foot' }, t('Si tu nombre no aparece, está reservado para otra cuenta o alguien ya eligió el tuyo, avísale a {org}.', { org: inv.organizerName }))
     );
   }
 
@@ -622,7 +732,7 @@
   // -------------------------------------------------------------------------
   async function showGroup(id) {
     if (!state.detail || state.detail.group.id !== id) {
-      state.$main.replaceChildren(h('p', { class: 'loading' }, 'Cargando intercambio…'));
+      state.$main.replaceChildren(h('p', { class: 'loading' }, t('Cargando intercambio…')));
     }
     try {
       state.detail = await api(`/api/groups/${id}`);
@@ -630,7 +740,7 @@
       state.detail = null;
       if (e.status === 404) {
         state.$main.replaceChildren(
-          h('section', { class: 'welcome' }, h('h1', {}, 'No encontramos ese intercambio'), h('p', {}, e.message), h('div', {}, h('a', { class: 'btn', href: '#/' }, 'Ir a mis intercambios')))
+          h('section', { class: 'welcome' }, h('h1', {}, t('No encontramos ese intercambio')), h('p', {}, e.message), h('div', {}, h('a', { class: 'btn', href: '#/' }, t('Ir a mis intercambios'))))
         );
       } else if (e.status !== 401) {
         state.$main.replaceChildren(h('p', { class: 'loading' }, e.message));
@@ -647,7 +757,7 @@
 
   function renderGroup() {
     const d = state.detail;
-    document.title = `${d.group.name} · Intercambio navideño`;
+    document.title = `${d.group.name} · ${t('Intercambio navideño')}`;
     state.$main.replaceChildren(
       ...[
         groupHead(d),
@@ -674,9 +784,9 @@
   function groupHead(d) {
     const g = d.group;
     const meta = [];
-    if (g.eventDate) meta.push(['Fecha', `${fmtDate(g.eventDate)} (${countdown(g.eventDate)})`]);
-    if (g.budget !== null) meta.push(['Presupuesto por regalo', fmtMoney(g.budget, g.currency)]);
-    meta.push(['Organiza', g.isOrganizer ? `${g.organizerName} (tú)` : g.organizerName]);
+    if (g.eventDate) meta.push([t('Fecha'), `${fmtDate(g.eventDate)} (${countdown(g.eventDate)})`]);
+    if (g.budget !== null) meta.push([t('Presupuesto por regalo'), fmtMoney(g.budget, g.currency)]);
+    meta.push([t('Organiza'), g.isOrganizer ? t('{name} (tú)', { name: g.organizerName }) : g.organizerName]);
     return h(
       'header',
       { class: 'group-head' },
@@ -684,7 +794,7 @@
         'div',
         { class: 'group-head-top' },
         h('h1', {}, g.name),
-        g.isOrganizer ? h('button', { class: 'btn btn-ghost', type: 'button', onclick: openAdmin }, 'Administrar intercambio') : null
+        g.isOrganizer ? h('button', { class: 'btn btn-ghost', type: 'button', onclick: openAdmin }, t('Administrar intercambio')) : null
       ),
       h('dl', { class: 'group-meta' }, meta.map(([k, v]) => h('div', {}, h('dt', {}, k), h('dd', {}, v)))),
       g.description ? h('p', { class: 'group-desc' }, g.description) : null
@@ -696,19 +806,19 @@
     if (!d.me) {
       return h(
         'section',
-        { 'aria-label': 'Tu papel en el intercambio' },
+        { 'aria-label': t('Tu papel en el intercambio') },
         giftTag({
-          single: 'Organizas este intercambio',
-          note: 'No estás entre los participantes, así que no entras al sorteo. Si quieres participar, abre “Administrar intercambio”, agrega tu nombre y pulsa “Soy yo”.',
+          single: t('Organizas este intercambio'),
+          note: t('No estás entre los participantes, así que no entras al sorteo. Si quieres participar, abre “Administrar intercambio”, agrega tu nombre y pulsa “Soy yo”.'),
         })
       );
     }
     if (!d.receiver) {
-      const who = g.isOrganizer ? 'Cuando hagas el sorteo' : `Cuando ${g.organizerName} haga el sorteo`;
+      const who = g.isOrganizer ? t('Cuando hagas el sorteo') : t('Cuando {name} haga el sorteo', { name: g.organizerName });
       return h(
         'section',
-        { 'aria-label': 'Tu asignación' },
-        giftTag({ from: d.me.name, to: '¿?', pending: true, note: `${who}, aquí verás a quién le regalas.` })
+        { 'aria-label': t('Tu asignación') },
+        giftTag({ from: d.me.name, to: t('¿?'), pending: true, note: t('{who}, aquí verás a quién le regalas.', { who }) })
       );
     }
     const key = `visto:${g.id}:${d.receiver.id}`;
@@ -716,12 +826,12 @@
     storage.set(key, '1');
     return h(
       'section',
-      { 'aria-label': 'Tu asignación' },
+      { 'aria-label': t('Tu asignación') },
       giftTag({
         from: d.me.name,
         to: d.receiver.name,
         reveal,
-        note: 'Es secreto: solo tú puedes ver a quién le regalas.',
+        note: t('Es secreto: solo tú puedes ver a quién le regalas.'),
       })
     );
   }
@@ -735,8 +845,8 @@
       h(
         'div',
         { class: 'section-head' },
-        h('h2', {}, 'Participantes'),
-        h('p', {}, `${total} ${total === 1 ? 'persona' : 'personas'}. Nadie puede ver a quién le tocó a los demás.`)
+        h('h2', {}, t('Participantes')),
+        h('p', {}, t(total === 1 ? '{n} persona. Nadie puede ver a quién le tocó a los demás.' : '{n} personas. Nadie puede ver a quién le tocó a los demás.', { n: total }))
       ),
       others.length
         ? h(
@@ -746,20 +856,20 @@
               h(
                 'li',
                 { class: 'mini-tag' },
-                h('div', { class: 'mini-line' }, h('span', { class: 'k' }, 'De:'), h('span', { class: 'v' }, p.name)),
+                h('div', { class: 'mini-line' }, h('span', { class: 'k' }, t('De:')), h('span', { class: 'v' }, p.name)),
                 h(
                   'div',
                   { class: 'mini-line' },
-                  h('span', { class: 'k' }, 'Para:'),
+                  h('span', { class: 'k' }, t('Para:')),
                   d.group.drawn
-                    ? h('span', { class: 'secret', 'aria-label': 'Oculto' }, '***')
-                    : h('span', { class: 'k', style: 'width:auto' }, 'sin sortear')
+                    ? h('span', { class: 'secret', 'aria-label': t('Oculto') }, '***')
+                    : h('span', { class: 'k', style: 'width:auto' }, t('sin sortear'))
                 ),
-                h('p', { class: `mini-status${p.joined ? ' in' : ''}` }, p.joined ? 'Ya entró' : 'Aún no entra')
+                h('p', { class: `mini-status${p.joined ? ' in' : ''}` }, p.joined ? t('Ya entró') : t('Aún no entra'))
               )
             )
           )
-        : h('p', { class: 'empty' }, 'Todavía no hay más participantes en este intercambio.')
+        : h('p', { class: 'empty' }, t('Todavía no hay más participantes en este intercambio.'))
     );
   }
 
@@ -772,7 +882,7 @@
       item.photoUrl
         ? h(
             'button',
-            { class: 'thumb-btn', type: 'button', 'aria-label': `Ver foto de ${item.name}`, onclick: () => showPhoto(item.photoUrl, item.name) },
+            { class: 'thumb-btn', type: 'button', 'aria-label': t('Ver foto de {name}', { name: item.name }), onclick: () => showPhoto(item.photoUrl, item.name) },
             h('img', { src: item.photoUrl, alt: '', loading: 'lazy' })
           )
         : svg(ICON_GIFT)
@@ -780,10 +890,10 @@
     const sub = h(
       'div',
       { class: 'item-sub' },
-      item.cost !== null ? h('span', { class: 'item-cost' }, fmtMoney(item.cost, currency)) : h('span', {}, 'Sin precio'),
-      item.link ? h('a', { href: item.link, target: '_blank', rel: 'noopener noreferrer nofollow' }, `Ver en ${hostOf(item.link)}`) : null
+      item.cost !== null ? h('span', { class: 'item-cost' }, fmtMoney(item.cost, currency)) : h('span', {}, t('Sin precio')),
+      item.link ? h('a', { href: item.link, target: '_blank', rel: 'noopener noreferrer nofollow' }, t('Ver en {host}', { host: hostOf(item.link) })) : null
     );
-    li.append(h('span', { class: 'rank', 'aria-label': `Preferencia ${rank}` }, String(rank)), thumb, h('div', { class: 'item-info' }, h('p', { class: 'item-name' }, item.name), sub));
+    li.append(h('span', { class: 'rank', 'aria-label': t('Preferencia {n}', { n: rank }) }, String(rank)), thumb, h('div', { class: 'item-info' }, h('p', { class: 'item-name' }, item.name), sub));
     if (!own) return li;
 
     li.append(
@@ -804,12 +914,12 @@
                   itemForm({
                     item,
                     currency,
-                    title: 'Editar regalo',
-                    submitText: 'Guardar cambios',
+                    title: t('Editar regalo'),
+                    submitText: t('Guardar cambios'),
                     onCancel: () => renderGroup(),
                     onSubmit: async (fd) => {
                       await api(`/api/wishlist/${item.id}`, { method: 'PATCH', form: fd });
-                      toast('Cambios guardados');
+                      toast(t('Cambios guardados'));
                       await refreshGroup();
                     },
                   })
@@ -818,7 +928,7 @@
               li.querySelector('input')?.focus();
             },
           },
-          'Editar'
+          t('Editar')
         ),
         h(
           'button',
@@ -827,30 +937,30 @@
             type: 'button',
             onclick: async () => {
               const ok = await confirmDialog({
-                title: '¿Borrar este regalo?',
-                text: `“${item.name}” se quitará de tu wishlist.`,
-                confirm: 'Borrar regalo',
+                title: t('¿Borrar este regalo?'),
+                text: t('“{name}” se quitará de tu wishlist.', { name: item.name }),
+                confirm: t('Borrar regalo'),
                 danger: true,
               });
               if (!ok) return;
               try {
                 await api(`/api/wishlist/${item.id}`, { method: 'DELETE' });
-                toast('Regalo borrado');
+                toast(t('Regalo borrado'));
                 await refreshGroup();
               } catch (e) {
                 toast(e.message, 'error');
               }
             },
           },
-          'Borrar'
+          t('Borrar')
         )
       ),
       h(
         'div',
         { class: 'order-ctl' },
-        h('button', { class: 'order-btn', type: 'button', 'data-move': '-1', 'aria-label': `Subir “${item.name}”` }, svg(ICON_UP)),
-        h('button', { class: 'order-btn', type: 'button', 'data-move': '1', 'aria-label': `Bajar “${item.name}”` }, svg(ICON_DOWN)),
-        h('span', { class: 'drag-handle', title: 'Arrastra para cambiar el orden', 'aria-hidden': 'true' }, svg(ICON_GRIP))
+        h('button', { class: 'order-btn', type: 'button', 'data-move': '-1', 'aria-label': t('Subir “{name}”', { name: item.name }) }, svg(ICON_UP)),
+        h('button', { class: 'order-btn', type: 'button', 'data-move': '1', 'aria-label': t('Bajar “{name}”', { name: item.name }) }, svg(ICON_DOWN)),
+        h('span', { class: 'drag-handle', title: t('Arrastra para cambiar el orden'), 'aria-hidden': 'true' }, svg(ICON_GRIP))
       )
     );
     return li;
@@ -863,7 +973,7 @@
       const rank = li.querySelector('.rank');
       if (rank) {
         rank.textContent = String(i + 1);
-        rank.setAttribute('aria-label', `Preferencia ${i + 1}`);
+        rank.setAttribute('aria-label', t('Preferencia {n}', { n: i + 1 }));
       }
       const up = li.querySelector('[data-move="-1"]');
       const down = li.querySelector('[data-move="1"]');
@@ -938,10 +1048,10 @@
 
   function itemForm({ item = null, currency, title, submitText, onSubmit, onCancel }) {
     const err = h('p', { class: 'form-error full', role: 'alert' });
-    const name = h('input', { class: 'input', name: 'name', required: true, maxlength: 120, value: item ? item.name : '', placeholder: 'Ej. Audífonos inalámbricos' });
+    const name = h('input', { class: 'input', name: 'name', required: true, maxlength: 120, value: item ? item.name : '', placeholder: t('Ej. Audífonos inalámbricos') });
     const cost = h('input', { class: 'input', name: 'cost', inputmode: 'decimal', value: item && item.cost !== null ? String(item.cost) : '', placeholder: '0' });
     const link = h('input', { class: 'input', name: 'link', inputmode: 'url', maxlength: 2000, value: item ? item.link || '' : '', placeholder: 'https://…' });
-    const file = h('input', { type: 'file', accept: 'image/*', 'aria-label': 'Foto del regalo' });
+    const file = h('input', { type: 'file', accept: 'image/*', 'aria-label': t('Foto del regalo') });
     const preview = h('div', { class: 'thumb' }, item && item.photoUrl ? h('img', { src: item.photoUrl, alt: '' }) : svg(ICON_GIFT));
     let removePhoto = null;
     if (item && item.photoUrl) {
@@ -983,13 +1093,13 @@
         },
       },
       h('h3', { class: 'full' }, title),
-      h('label', { class: 'field' }, h('span', {}, 'Nombre del regalo'), name),
-      h('label', { class: 'field' }, h('span', {}, `Costo aproximado (${currency})`), cost),
-      h('label', { class: 'field full' }, h('span', {}, 'Link'), link, h('small', {}, 'Opcional. Dónde se puede comprar.')),
+      h('label', { class: 'field' }, h('span', {}, t('Nombre del regalo')), name),
+      h('label', { class: 'field' }, h('span', {}, t('Costo aproximado ({currency})', { currency })), cost),
+      h('label', { class: 'field full' }, h('span', {}, t('Link')), link, h('small', {}, t('Opcional. Dónde se puede comprar.'))),
       h(
         'div',
         { class: 'field full' },
-        h('span', {}, 'Foto'),
+        h('span', {}, t('Foto')),
         h(
           'div',
           { class: 'photo-pick' },
@@ -998,7 +1108,7 @@
             'div',
             {},
             file,
-            removePhoto ? h('label', { class: 'form-row', style: 'margin-top:6px;font-size:14px;gap:6px' }, removePhoto, 'Quitar la foto actual') : null
+            removePhoto ? h('label', { class: 'form-row', style: 'margin-top:6px;font-size:14px;gap:6px' }, removePhoto, t('Quitar la foto actual')) : null
           )
         )
       ),
@@ -1006,7 +1116,7 @@
         'div',
         { class: 'form-row full' },
         submit,
-        onCancel ? h('button', { class: 'btn btn-ghost', type: 'button', onclick: onCancel }, 'Cancelar') : null
+        onCancel ? h('button', { class: 'btn btn-ghost', type: 'button', onclick: onCancel }, t('Cancelar')) : null
       ),
       err
     );
@@ -1017,11 +1127,11 @@
     const items = d.myWishlist;
     const form = itemForm({
       currency: cur,
-      title: 'Agregar una idea de regalo',
-      submitText: 'Agregar a mi wishlist',
+      title: t('Agregar una idea de regalo'),
+      submitText: t('Agregar a mi wishlist'),
       onSubmit: async (fd) => {
         await api(`/api/groups/${d.group.id}/wishlist`, { method: 'POST', form: fd });
-        toast('Regalo agregado a tu wishlist');
+        toast(t('Regalo agregado a tu wishlist'));
         await refreshGroup();
       },
     });
@@ -1036,11 +1146,11 @@
       h(
         'div',
         { class: 'section-head' },
-        h('h2', {}, 'Mi wishlist'),
-        h('p', {}, 'Solo la ve la persona a la que le tocas.')
+        h('h2', {}, t('Mi wishlist')),
+        h('p', {}, t('Solo la ve la persona a la que le tocas.'))
       ),
-      items.length > 1 ? h('p', { class: 'list-hint' }, 'Ordénala por preferencia: la número 1 es la que más quieres. Arrastra desde ⠿ o usa las flechas.') : null,
-      list || h('p', { class: 'empty' }, 'Agrega ideas de regalo para que la persona a la que le tocaste sepa qué darte.'),
+      items.length > 1 ? h('p', { class: 'list-hint' }, t('Ordénala por preferencia: la número 1 es la que más quieres. Arrastra desde ⠿ o usa las flechas.')) : null,
+      list || h('p', { class: 'empty' }, t('Agrega ideas de regalo para que la persona a la que le tocaste sepa qué darte.')),
       form
     );
   }
@@ -1055,12 +1165,12 @@
       h(
         'div',
         { class: 'section-head' },
-        h('h2', {}, `Wishlist de ${name}`),
-        h('p', {}, items.length > 1 ? 'En orden de preferencia: la número 1 es la que más le gustaría.' : 'Ideas que le gustaría recibir.')
+        h('h2', {}, t('Wishlist de {name}', { name })),
+        h('p', {}, items.length > 1 ? t('En orden de preferencia: la número 1 es la que más le gustaría.') : t('Ideas que le gustaría recibir.'))
       ),
       items.length
         ? h('ol', { class: 'items' }, items.map((i, n) => itemRow(i, { own: false, currency: cur, rank: n + 1 })))
-        : h('p', { class: 'empty' }, `${name} todavía no agrega ideas. Vuelve a revisar más tarde.`)
+        : h('p', { class: 'empty' }, t('{name} todavía no agrega ideas. Vuelve a revisar más tarde.', { name }))
     );
   }
 
@@ -1089,8 +1199,8 @@
       h(
         'header',
         { class: 'admin-top' },
-        h('div', {}, h('h2', { id: 'admin-title' }, 'Administrar intercambio'), h('p', {}, d.group.name)),
-        h('button', { class: 'icon-btn admin-close', type: 'button', 'aria-label': 'Cerrar', onclick: () => dlg.close() }, svg(ICON_X))
+        h('div', {}, h('h2', { id: 'admin-title' }, t('Administrar intercambio')), h('p', {}, d.group.name)),
+        h('button', { class: 'icon-btn admin-close', type: 'button', 'aria-label': t('Cerrar'), onclick: () => dlg.close() }, svg(ICON_X))
       ),
       body
     );
@@ -1105,23 +1215,23 @@
 
     // --- Enlace del grupo ---
     const url = inviteUrl(g.inviteToken);
-    const waText = `🎁 Te invito al intercambio “${g.name}”. Entra con tu cuenta de Google y elige tu nombre: ${url}`;
+    const waText = t('🎁 Te invito al intercambio “{group}”. Entra con tu cuenta de Google y elige tu nombre: {url}', { group: g.name, url });
     const inviteBlock = h(
       'div',
       { class: 'admin-block' },
-      h('h3', {}, 'Invita al grupo'),
-      h('p', { class: 'admin-note' }, 'Manda este enlace al grupo. Cada quien entra con su cuenta de Google y elige su nombre de la lista; cada nombre se puede elegir una sola vez.'),
+      h('h3', {}, t('Invita al grupo')),
+      h('p', { class: 'admin-note' }, t('Manda este enlace al grupo. Cada quien entra con su cuenta de Google y elige su nombre de la lista; cada nombre se puede elegir una sola vez.')),
       h(
         'div',
         { class: 'share' },
         h('code', {}, url),
-        h('button', { class: 'btn btn-sm', type: 'button', onclick: () => copyText(url, 'Enlace copiado') }, 'Copiar enlace'),
-        h('a', { class: 'btn btn-ghost btn-sm', href: `https://wa.me/?text=${encodeURIComponent(waText)}`, target: '_blank', rel: 'noopener noreferrer' }, 'Enviar por WhatsApp')
+        h('button', { class: 'btn btn-sm', type: 'button', onclick: () => copyText(url, t('Enlace copiado')) }, t('Copiar enlace')),
+        h('a', { class: 'btn btn-ghost btn-sm', href: `https://wa.me/?text=${encodeURIComponent(waText)}`, target: '_blank', rel: 'noopener noreferrer' }, t('Enviar por WhatsApp'))
       ),
       h(
         'p',
         { class: 'admin-note' },
-        n ? `${n - pending} de ${n} ya eligieron su nombre. ` : '',
+        n ? t('{done} de {n} ya eligieron su nombre. ', { done: n - pending, n }) : '',
         h(
           'button',
           {
@@ -1129,30 +1239,30 @@
             type: 'button',
             onclick: async () => {
               const ok = await confirmDialog({
-                title: '¿Cambiar el enlace?',
-                text: 'El enlace actual dejará de servir y tendrás que mandar el nuevo a quienes aún no entran. Quienes ya eligieron su nombre no se ven afectados.',
-                confirm: 'Cambiar enlace',
+                title: t('¿Cambiar el enlace?'),
+                text: t('El enlace actual dejará de servir y tendrás que mandar el nuevo a quienes aún no entran. Quienes ya eligieron su nombre no se ven afectados.'),
+                confirm: t('Cambiar enlace'),
               });
               if (!ok) return;
               try {
                 await api(`/api/groups/${gid}/invite`, { method: 'POST' });
-                toast('Enlace nuevo listo');
+                toast(t('Enlace nuevo listo'));
                 await refreshGroup();
               } catch (e) {
                 toast(e.message, 'error');
               }
             },
           },
-          'Cambiar enlace'
+          t('Cambiar enlace')
         )
       )
     );
 
     // --- Participantes ---
     const addErr = h('p', { class: 'form-error', role: 'alert' });
-    const addName = h('input', { class: 'input', placeholder: 'Nombre que verá el grupo', maxlength: 60, required: true });
-    const addEmail = h('input', { class: 'input', type: 'email', placeholder: 'Opcional', maxlength: 254 });
-    const addBtn = h('button', { class: 'btn', type: 'submit' }, 'Agregar');
+    const addName = h('input', { class: 'input', placeholder: t('Nombre que verá el grupo'), maxlength: 60, required: true });
+    const addEmail = h('input', { class: 'input', type: 'email', placeholder: t('Opcional'), maxlength: 254 });
+    const addBtn = h('button', { class: 'btn', type: 'submit' }, t('Agregar'));
     const addForm = h(
       'form',
       {
@@ -1160,10 +1270,10 @@
         onsubmit: async (e) => {
           e.preventDefault();
           addErr.textContent = '';
-          busy(addBtn, true, 'Agregando…');
+          busy(addBtn, true, t('Agregando…'));
           try {
             await api(`/api/groups/${gid}/members`, { method: 'POST', body: { name: addName.value, email: addEmail.value } });
-            toast(`${addName.value.trim()} se agregó a la lista`);
+            toast(t('{name} se agregó a la lista', { name: addName.value.trim() }));
             await refreshGroup({ groups: true });
             document.querySelector('#admin-dialog .add-person input')?.focus();
           } catch (ex) {
@@ -1172,24 +1282,24 @@
           }
         },
       },
-      h('label', { class: 'field' }, h('span', {}, 'Agregar a alguien'), addName),
-      h('label', { class: 'field' }, h('span', {}, 'Correo de Google (opcional)'), addEmail),
+      h('label', { class: 'field' }, h('span', {}, t('Agregar a alguien')), addName),
+      h('label', { class: 'field' }, h('span', {}, t('Correo de Google (opcional)')), addEmail),
       addBtn
     );
     const peopleBlock = h(
       'div',
       { class: 'admin-block' },
-      h('h3', {}, 'Participantes'),
-      h('p', { class: 'admin-note' }, 'El nombre que escribas es el que verá todo el grupo. Si registras el correo de Google de alguien, entra directo a su nombre; los demás lo eligen con el enlace. Si alguien eligió un nombre que no era el suyo, usa “Liberar”.'),
+      h('h3', {}, t('Participantes')),
+      h('p', { class: 'admin-note' }, t('El nombre que escribas es el que verá todo el grupo. Si registras el correo de Google de alguien, entra directo a su nombre; los demás lo eligen con el enlace. Si alguien eligió un nombre que no era el suyo, usa “Liberar”.')),
       n
         ? h(
             'table',
             { class: 'people' },
-            h('thead', {}, h('tr', {}, h('th', {}, 'Nombre'), h('th', {}, 'Quién lo eligió'), h('th', {}, h('span', { class: 'sr-only' }, 'Acciones')))),
+            h('thead', {}, h('tr', {}, h('th', {}, t('Nombre')), h('th', {}, t('Quién lo eligió')), h('th', {}, h('span', { class: 'sr-only' }, t('Acciones'))))),
             h('tbody', {}, d.participants.map((p) => personRow(d, p)))
           )
-        : h('p', { class: 'empty' }, 'Todavía no hay nadie en la lista.'),
-      g.drawn ? h('p', { class: 'admin-note' }, 'Para agregar o quitar personas, primero reinicia el sorteo.') : addForm,
+        : h('p', { class: 'empty' }, t('Todavía no hay nadie en la lista.')),
+      g.drawn ? h('p', { class: 'admin-note' }, t('Para agregar o quitar personas, primero reinicia el sorteo.')) : addForm,
       addErr
     );
 
@@ -1198,7 +1308,7 @@
       ? h(
           'div',
           { class: 'draw-box' },
-          h('p', {}, 'El sorteo ya se hizo. Cada quien puede ver a quién le regala.'),
+          h('p', {}, t('El sorteo ya se hizo. Cada quien puede ver a quién le regala.')),
           h(
             'button',
             {
@@ -1206,22 +1316,22 @@
               type: 'button',
               onclick: async () => {
                 const ok = await confirmDialog({
-                  title: '¿Reiniciar el sorteo?',
-                  text: 'Se borrarán todas las asignaciones y tendrás que sortear de nuevo. Las wishlists se conservan. Avísale al grupo, porque a varios les tocará otra persona.',
-                  confirm: 'Reiniciar sorteo',
+                  title: t('¿Reiniciar el sorteo?'),
+                  text: t('Se borrarán todas las asignaciones y tendrás que sortear de nuevo. Las wishlists se conservan. Avísale al grupo, porque a varios les tocará otra persona.'),
+                  confirm: t('Reiniciar sorteo'),
                   danger: true,
                 });
                 if (!ok) return;
                 try {
                   await api(`/api/groups/${gid}/draw/reset`, { method: 'POST' });
-                  toast('Sorteo reiniciado');
+                  toast(t('Sorteo reiniciado'));
                   await refreshGroup({ groups: true });
                 } catch (e) {
                   toast(e.message, 'error');
                 }
               },
             },
-            'Reiniciar sorteo'
+            t('Reiniciar sorteo')
           )
         )
       : h(
@@ -1231,10 +1341,15 @@
             'p',
             {},
             n < 3
-              ? `Hay ${n} ${n === 1 ? 'participante' : 'participantes'}. Se necesitan al menos 3 para sortear.`
+              ? t(n === 1 ? 'Hay {n} participante. Se necesitan al menos 3 para sortear.' : 'Hay {n} participantes. Se necesitan al menos 3 para sortear.', { n })
               : pending
-                ? `Hay ${n} participantes y ${pending} aún no ${pending === 1 ? 'elige' : 'eligen'} su nombre. Puedes sortear ya: verán a quién le regalan en cuanto entren.`
-                : `Los ${n} participantes ya eligieron su nombre. A cada quien le tocará otra persona al azar y nadie podrá ver las asignaciones de los demás.`
+                ? t(
+                    pending === 1
+                      ? 'Hay {n} participantes y {p} aún no elige su nombre. Puedes sortear ya: verán a quién le regalan en cuanto entren.'
+                      : 'Hay {n} participantes y {p} aún no eligen su nombre. Puedes sortear ya: verán a quién le regalan en cuanto entren.',
+                    { n, p: pending }
+                  )
+                : t('Los {n} participantes ya eligieron su nombre. A cada quien le tocará otra persona al azar y nadie podrá ver las asignaciones de los demás.', { n })
           ),
           h(
             'button',
@@ -1245,15 +1360,15 @@
               onclick: async (e) => {
                 const btn = e.currentTarget;
                 const ok = await confirmDialog({
-                  title: '¿Hacer el sorteo?',
-                  text: `Se sortearán ${n} participantes. Después ya no podrás agregar ni quitar personas, a menos que reinicies el sorteo.`,
-                  confirm: 'Hacer el sorteo',
+                  title: t('¿Hacer el sorteo?'),
+                  text: t('Se sortearán {n} participantes. Después ya no podrás agregar ni quitar personas, a menos que reinicies el sorteo.', { n }),
+                  confirm: t('Hacer el sorteo'),
                 });
                 if (!ok) return;
-                busy(btn, true, 'Sorteando…');
+                busy(btn, true, t('Sorteando…'));
                 try {
                   await api(`/api/groups/${gid}/draw`, { method: 'POST' });
-                  toast('¡Sorteo hecho! Ya cada quien puede ver a quién le regala.');
+                  toast(t('¡Sorteo hecho! Ya cada quien puede ver a quién le regala.'));
                   await refreshGroup({ groups: true });
                 } catch (ex) {
                   toast(ex.message, 'error');
@@ -1261,7 +1376,7 @@
                 }
               },
             },
-            'Hacer el sorteo'
+            t('Hacer el sorteo')
           )
         );
 
@@ -1269,10 +1384,10 @@
     const infoErr = h('p', { class: 'form-error', role: 'alert' });
     const fName = h('input', { class: 'input', required: true, maxlength: 80, value: g.name });
     const fDate = h('input', { class: 'input', type: 'date', value: g.eventDate || '' });
-    const fBudget = h('input', { class: 'input', inputmode: 'decimal', value: g.budget !== null ? String(g.budget) : '', placeholder: 'Sin límite' });
+    const fBudget = h('input', { class: 'input', inputmode: 'decimal', value: g.budget !== null ? String(g.budget) : '', placeholder: t('Sin límite') });
     const fCur = currencySelect(g.currency);
     const fDesc = h('textarea', { class: 'input', maxlength: 500 }, g.description || '');
-    const infoBtn = h('button', { class: 'btn', type: 'submit' }, 'Guardar cambios');
+    const infoBtn = h('button', { class: 'btn', type: 'submit' }, t('Guardar cambios'));
     const infoForm = h(
       'form',
       {
@@ -1286,7 +1401,7 @@
               method: 'PATCH',
               body: { name: fName.value, eventDate: fDate.value, budget: fBudget.value, currency: fCur.value, description: fDesc.value },
             });
-            toast('Cambios guardados');
+            toast(t('Cambios guardados'));
             await refreshGroup({ groups: true });
           } catch (ex) {
             infoErr.textContent = ex.message;
@@ -1294,9 +1409,9 @@
           }
         },
       },
-      h('div', { class: 'grid-2' }, h('label', { class: 'field' }, h('span', {}, 'Nombre del intercambio'), fName), h('label', { class: 'field' }, h('span', {}, 'Fecha'), fDate)),
-      h('div', { class: 'grid-2' }, h('label', { class: 'field' }, h('span', {}, 'Presupuesto por regalo'), fBudget), h('label', { class: 'field' }, h('span', {}, 'Moneda'), fCur)),
-      h('label', { class: 'field' }, h('span', {}, 'Notas para el grupo'), fDesc),
+      h('div', { class: 'grid-2' }, h('label', { class: 'field' }, h('span', {}, t('Nombre del intercambio')), fName), h('label', { class: 'field' }, h('span', {}, t('Fecha')), fDate)),
+      h('div', { class: 'grid-2' }, h('label', { class: 'field' }, h('span', {}, t('Presupuesto por regalo')), fBudget), h('label', { class: 'field' }, h('span', {}, t('Moneda')), fCur)),
+      h('label', { class: 'field' }, h('span', {}, t('Notas para el grupo')), fDesc),
       h('div', { class: 'form-row' }, infoBtn),
       infoErr
     );
@@ -1304,12 +1419,12 @@
     return [
       inviteBlock,
       peopleBlock,
-      h('div', { class: 'admin-block' }, h('h3', {}, 'Sorteo'), drawBox),
-      h('div', { class: 'admin-block' }, h('h3', {}, 'Datos del intercambio'), infoForm),
+      h('div', { class: 'admin-block' }, h('h3', {}, t('Sorteo')), drawBox),
+      h('div', { class: 'admin-block' }, h('h3', {}, t('Datos del intercambio')), infoForm),
       h(
         'div',
         { class: 'danger-zone' },
-        h('p', {}, 'Borrar el intercambio elimina participantes, sorteo y wishlists. No se puede deshacer.'),
+        h('p', {}, t('Borrar el intercambio elimina participantes, sorteo y wishlists. No se puede deshacer.')),
         h(
           'button',
           {
@@ -1317,15 +1432,15 @@
             type: 'button',
             onclick: async () => {
               const ok = await confirmDialog({
-                title: `¿Borrar “${g.name}”?`,
-                text: 'Se eliminarán participantes, sorteo y wishlists. No se puede deshacer.',
-                confirm: 'Borrar intercambio',
+                title: t('¿Borrar “{name}”?', { name: g.name }),
+                text: t('Se eliminarán participantes, sorteo y wishlists. No se puede deshacer.'),
+                confirm: t('Borrar intercambio'),
                 danger: true,
               });
               if (!ok) return;
               try {
                 await api(`/api/groups/${gid}`, { method: 'DELETE' });
-                toast('Intercambio borrado');
+                toast(t('Intercambio borrado'));
                 state.detail = null;
                 await loadGroups();
                 location.hash = '#/';
@@ -1334,7 +1449,7 @@
               }
             },
           },
-          'Borrar intercambio'
+          t('Borrar intercambio')
         )
       ),
     ];
@@ -1353,59 +1468,59 @@
       }
     };
     const release = async () => {
-      const extra = g.drawn ? ' Esa cuenta ya pudo ver a quién le regala este nombre; si fue un error, considera reiniciar el sorteo.' : '';
+      const extra = g.drawn ? t(' Esa cuenta ya pudo ver a quién le regala este nombre; si fue un error, considera reiniciar el sorteo.') : '';
       const ok = await confirmDialog({
-        title: `¿Liberar “${p.name}”?`,
-        text: `${p.account || 'La cuenta actual'} dejará de estar ligada a este nombre, y el nombre volverá a aparecer en el enlace del grupo para que la persona correcta lo elija.${extra}`,
-        confirm: 'Liberar nombre',
+        title: t('¿Liberar “{name}”?', { name: p.name }),
+        text: t('{account} dejará de estar ligada a este nombre, y el nombre volverá a aparecer en el enlace del grupo para que la persona correcta lo elija.{extra}', { account: p.account || t('La cuenta actual'), extra }),
+        confirm: t('Liberar nombre'),
         danger: true,
       });
-      if (ok) act(() => api(`/api/groups/${g.id}/members/${p.id}/release`, { method: 'POST' }), `“${p.name}” quedó libre`);
+      if (ok) act(() => api(`/api/groups/${g.id}/members/${p.id}/release`, { method: 'POST' }), t('“{name}” quedó libre', { name: p.name }));
     };
     const claimMine = async () => {
       const ok = await confirmDialog({
-        title: `¿Eres ${p.name}?`,
-        text: `Tu cuenta ${state.user.email} quedará ligada a este nombre y entrarás al sorteo.`,
-        confirm: `Sí, soy ${p.name}`,
+        title: t('¿Eres {name}?', { name: p.name }),
+        text: t('Tu cuenta {email} quedará ligada a este nombre y entrarás al sorteo.', { email: state.user.email }),
+        confirm: t('Sí, soy {name}', { name: p.name }),
       });
-      if (ok) act(() => api(`/api/invites/${g.inviteToken}/claim`, { method: 'POST', body: { memberId: p.id } }), `Ya participas como ${p.name}`);
+      if (ok) act(() => api(`/api/invites/${g.inviteToken}/claim`, { method: 'POST', body: { memberId: p.id } }), t('Ya participas como {name}', { name: p.name }));
     };
     const remove = async () => {
       const ok = await confirmDialog({
-        title: `¿Quitar a ${p.name}?`,
-        text: 'Se quitará del intercambio junto con su wishlist.',
-        confirm: 'Quitar',
+        title: t('¿Quitar a {name}?', { name: p.name }),
+        text: t('Se quitará del intercambio junto con su wishlist.'),
+        confirm: t('Quitar'),
         danger: true,
       });
-      if (ok) act(() => api(`/api/groups/${g.id}/members/${p.id}`, { method: 'DELETE' }), `${p.name} ya no está en el intercambio`);
+      if (ok) act(() => api(`/api/groups/${g.id}/members/${p.id}`, { method: 'DELETE' }), t('{name} ya no está en el intercambio', { name: p.name }));
     };
     const view = () => {
       tr.replaceChildren(
-        h('td', { class: 'person-name' }, h('div', {}, p.name, p.isMe ? ' (tú)' : ''), !p.joined && p.email ? h('small', { class: 'muted' }, `Entra con ${p.email}`) : null),
-        h('td', { class: 'email' }, p.joined ? h('span', { class: 'pill in' }, p.account || 'Ya entró') : h('span', { class: 'pill' }, 'Pendiente')),
+        h('td', { class: 'person-name' }, h('div', {}, p.name, p.isMe ? t(' (tú)') : ''), !p.joined && p.email ? h('small', { class: 'muted' }, t('Entra con {email}', { email: p.email })) : null),
+        h('td', { class: 'email' }, p.joined ? h('span', { class: 'pill in' }, p.account || t('Ya entró')) : h('span', { class: 'pill' }, t('Pendiente'))),
         h(
           'td',
           { class: 'actions' },
-          h('button', { class: 'btn-text', type: 'button', onclick: edit }, 'Editar'),
-          !d.me && !p.joined ? h('button', { class: 'btn-text', type: 'button', onclick: claimMine }, 'Soy yo') : null,
-          p.joined ? h('button', { class: 'btn-text', type: 'button', onclick: release }, 'Liberar') : null,
+          h('button', { class: 'btn-text', type: 'button', onclick: edit }, t('Editar')),
+          !d.me && !p.joined ? h('button', { class: 'btn-text', type: 'button', onclick: claimMine }, t('Soy yo')) : null,
+          p.joined ? h('button', { class: 'btn-text', type: 'button', onclick: release }, t('Liberar')) : null,
           h(
             'button',
-            { class: 'btn-text danger', type: 'button', disabled: g.drawn, title: g.drawn ? 'Reinicia el sorteo para quitar a alguien' : null, onclick: remove },
-            'Quitar'
+            { class: 'btn-text danger', type: 'button', disabled: g.drawn, title: g.drawn ? t('Reinicia el sorteo para quitar a alguien') : null, onclick: remove },
+            t('Quitar')
           )
         )
       );
     };
     const edit = () => {
-      const nameInput = h('input', { class: 'input', value: p.name, maxlength: 60, 'aria-label': 'Nombre' });
-      const emailInput = h('input', { class: 'input', type: 'email', value: p.email || '', maxlength: 254, placeholder: 'Correo de Google (opcional)', 'aria-label': 'Correo de Google (opcional)' });
-      const save = h('button', { class: 'btn-text', type: 'button' }, 'Guardar');
+      const nameInput = h('input', { class: 'input', value: p.name, maxlength: 60, 'aria-label': t('Nombre') });
+      const emailInput = h('input', { class: 'input', type: 'email', value: p.email || '', maxlength: 254, placeholder: t('Correo de Google (opcional)'), 'aria-label': t('Correo de Google (opcional)') });
+      const save = h('button', { class: 'btn-text', type: 'button' }, t('Guardar'));
       save.addEventListener('click', async () => {
         save.disabled = true;
         try {
           await api(`/api/groups/${g.id}/members/${p.id}`, { method: 'PATCH', body: { name: nameInput.value, email: emailInput.value } });
-          toast('Nombre actualizado');
+          toast(t('Nombre actualizado'));
           await refreshGroup({ groups: true });
         } catch (e) {
           toast(e.message, 'error');
@@ -1419,7 +1534,7 @@
       }
       tr.replaceChildren(
         h('td', { colspan: 2 }, h('div', { class: 'edit-person' }, nameInput, emailInput)),
-        h('td', { class: 'actions' }, save, h('button', { class: 'btn-text', type: 'button', onclick: view }, 'Cancelar'))
+        h('td', { class: 'actions' }, save, h('button', { class: 'btn-text', type: 'button', onclick: view }, t('Cancelar')))
       );
       nameInput.focus();
     };
@@ -1432,10 +1547,10 @@
       'select',
       { class: 'input' },
       [
-        ['MXN', 'Pesos mexicanos (MXN)'],
-        ['USD', 'Dólares (USD)'],
-        ['EUR', 'Euros (EUR)'],
-        ['GBP', 'Libras (GBP)'],
+        ['MXN', t('Pesos mexicanos (MXN)')],
+        ['USD', t('Dólares (USD)')],
+        ['EUR', t('Euros (EUR)')],
+        ['GBP', t('Libras (GBP)')],
       ].map(([v, t]) => h('option', { value: v, selected: v === value }, t))
     );
   }
@@ -1444,24 +1559,29 @@
   // Crear intercambio
   // -------------------------------------------------------------------------
   function renderCreate() {
-    document.title = 'Crear intercambio · Intercambio navideño';
+    document.title = `${t('Crear intercambio')} · ${t('Intercambio navideño')}`;
     state.detail = null;
     const err = h('p', { class: 'form-error', role: 'alert' });
-    const fName = h('input', { class: 'input', required: true, maxlength: 80, placeholder: 'Ej. Posada de la familia' });
+    const fName = h('input', { class: 'input', required: true, maxlength: 80, placeholder: t('Ej. Posada de la familia') });
     const fDate = h('input', { class: 'input', type: 'date' });
-    const fBudget = h('input', { class: 'input', inputmode: 'decimal', placeholder: 'Sin límite' });
+    const fBudget = h('input', { class: 'input', inputmode: 'decimal', placeholder: t('Sin límite') });
     const fCur = currencySelect('MXN');
-    const fDesc = h('textarea', { class: 'input', maxlength: 500, placeholder: 'Lugar, hora o reglas. Ej. nada de ropa.' });
+    const fDesc = h('textarea', { class: 'input', maxlength: 500, placeholder: t('Lugar, hora o reglas. Ej. nada de ropa.') });
     const rowsBox = h('div', { class: 'person-rows' });
     const count = h('p', { class: 'hint' });
 
     const meCheck = h('input', { type: 'checkbox', checked: true });
-    const meName = h('input', { class: 'input', value: state.user.name || '', maxlength: 60, placeholder: 'Tu nombre en el grupo', 'aria-label': 'Tu nombre en el grupo' });
+    const meName = h('input', { class: 'input', value: state.user.name || '', maxlength: 60, placeholder: t('Tu nombre en el grupo'), 'aria-label': t('Tu nombre en el grupo') });
 
     const updateCount = () => {
       const others = [...rowsBox.querySelectorAll('input[name=pname]')].filter((i) => i.value.trim()).length;
       const total = others + (meCheck.checked ? 1 : 0);
-      count.textContent = `${total} ${total === 1 ? 'persona' : 'personas'} en total. Se necesitan al menos 3 para el sorteo; puedes agregar más después.`;
+      count.textContent = t(
+        total === 1
+          ? '{n} persona en total. Se necesitan al menos 3 para el sorteo; puedes agregar más después.'
+          : '{n} personas en total. Se necesitan al menos 3 para el sorteo; puedes agregar más después.',
+        { n: total }
+      );
     };
     meCheck.addEventListener('change', () => {
       meName.disabled = !meCheck.checked;
@@ -1477,14 +1597,14 @@
       return { name, email };
     };
     const addRow = ({ name = '', email = '' } = {}, after = null, focus = false) => {
-      const input = h('input', { class: 'input', name: 'pname', value: name, maxlength: 60, placeholder: 'Nombre', 'aria-label': 'Nombre de un participante', oninput: updateCount });
-      const mail = h('input', { class: 'input', name: 'pemail', type: 'email', value: email, maxlength: 254, placeholder: 'Correo de Google (opcional)', 'aria-label': 'Correo de Google (opcional)' });
+      const input = h('input', { class: 'input', name: 'pname', value: name, maxlength: 60, placeholder: t('Nombre'), 'aria-label': t('Nombre de un participante'), oninput: updateCount });
+      const mail = h('input', { class: 'input', name: 'pemail', type: 'email', value: email, maxlength: 254, placeholder: t('Correo de Google (opcional)'), 'aria-label': t('Correo de Google (opcional)') });
       const row = h(
         'div',
         { class: 'person-row' },
         input,
         mail,
-        h('button', { class: 'icon-btn', type: 'button', 'aria-label': 'Quitar de la lista', onclick: () => { row.remove(); updateCount(); } }, svg(ICON_X))
+        h('button', { class: 'icon-btn', type: 'button', 'aria-label': t('Quitar de la lista'), onclick: () => { row.remove(); updateCount(); } }, svg(ICON_X))
       );
       // Pegar una lista (una persona por línea, con o sin correo) crea una fila por persona.
       input.addEventListener('paste', (e) => {
@@ -1507,7 +1627,7 @@
     addRow();
     addRow();
 
-    const submit = h('button', { class: 'btn', type: 'submit' }, 'Crear intercambio');
+    const submit = h('button', { class: 'btn', type: 'submit' }, t('Crear intercambio'));
     const form = h(
       'form',
       {
@@ -1521,12 +1641,12 @@
             const email = r.querySelector('[name=pemail]').value.trim();
             if (!name && !email) continue;
             if (!name) {
-              err.textContent = `Falta el nombre de ${email}.`;
+              err.textContent = t('Falta el nombre de {email}.', { email });
               return;
             }
             participants.push({ name, email });
           }
-          busy(submit, true, 'Creando…');
+          busy(submit, true, t('Creando…'));
           try {
             const { id } = await api('/api/groups', {
               method: 'POST',
@@ -1541,7 +1661,7 @@
               },
             });
             await loadGroups();
-            state.openAdmin = 'Intercambio creado. Ahora comparte el enlace con el grupo.';
+            state.openAdmin = t('Intercambio creado. Ahora comparte el enlace con el grupo.');
             location.hash = `#/g/${id}`;
           } catch (ex) {
             err.textContent = ex.message;
@@ -1552,28 +1672,28 @@
       h(
         'div',
         { class: 'panel' },
-        h('h2', {}, 'El evento'),
-        h('div', { class: 'grid-2' }, h('label', { class: 'field' }, h('span', {}, 'Nombre del intercambio'), fName), h('label', { class: 'field' }, h('span', {}, 'Fecha'), fDate)),
-        h('div', { class: 'grid-2' }, h('label', { class: 'field' }, h('span', {}, 'Presupuesto por regalo'), fBudget), h('label', { class: 'field' }, h('span', {}, 'Moneda'), fCur)),
-        h('label', { class: 'field' }, h('span', {}, 'Notas para el grupo'), fDesc)
+        h('h2', {}, t('El evento')),
+        h('div', { class: 'grid-2' }, h('label', { class: 'field' }, h('span', {}, t('Nombre del intercambio')), fName), h('label', { class: 'field' }, h('span', {}, t('Fecha')), fDate)),
+        h('div', { class: 'grid-2' }, h('label', { class: 'field' }, h('span', {}, t('Presupuesto por regalo')), fBudget), h('label', { class: 'field' }, h('span', {}, t('Moneda')), fCur)),
+        h('label', { class: 'field' }, h('span', {}, t('Notas para el grupo')), fDesc)
       ),
       h(
         'div',
         { class: 'panel' },
-        h('h2', {}, 'Tú'),
-        h('label', { class: 'check-row' }, meCheck, 'Yo también participo en el sorteo'),
+        h('h2', {}, t('Tú')),
+        h('label', { class: 'check-row' }, meCheck, t('Yo también participo en el sorteo')),
         meName
       ),
       h(
         'div',
         { class: 'panel' },
-        h('h2', {}, 'Los demás participantes'),
-        h('p', { class: 'hint' }, 'Escribe cada nombre tal como quieres que lo vea el grupo. Si sabes el correo de Google de alguien, agrégalo: entrará directo a su nombre sin tener que elegirlo. Puedes pegar una lista, una persona por línea.'),
+        h('h2', {}, t('Los demás participantes')),
+        h('p', { class: 'hint' }, t('Escribe cada nombre tal como quieres que lo vea el grupo. Si sabes el correo de Google de alguien, agrégalo: entrará directo a su nombre sin tener que elegirlo. Puedes pegar una lista, una persona por línea.')),
         rowsBox,
         count,
-        h('div', {}, h('button', { class: 'btn btn-ghost', type: 'button', onclick: () => addRow({}, null, true) }, '+ Agregar otra persona'))
+        h('div', {}, h('button', { class: 'btn btn-ghost', type: 'button', onclick: () => addRow({}, null, true) }, t('+ Agregar otra persona')))
       ),
-      h('div', { class: 'create-actions' }, submit, h('a', { class: 'btn btn-ghost', href: '#/' }, 'Cancelar')),
+      h('div', { class: 'create-actions' }, submit, h('a', { class: 'btn btn-ghost', href: '#/' }, t('Cancelar'))),
       err
     );
 
@@ -1581,8 +1701,8 @@
       h(
         'section',
         { class: 'create' },
-        h('h1', {}, 'Crear intercambio'),
-        h('p', {}, 'Escribe los nombres del grupo. Después tendrás un enlace para compartir: cada quien entra con su cuenta de Google y elige su nombre. Quien tenga correo registrado entra directo.'),
+        h('h1', {}, t('Crear intercambio')),
+        h('p', {}, t('Escribe los nombres del grupo. Después tendrás un enlace para compartir: cada quien entra con su cuenta de Google y elige su nombre. Quien tenga correo registrado entra directo.')),
         form
       )
     );
@@ -1598,9 +1718,18 @@
     const meP = api('/api/me')
       .then((r) => r.user)
       .catch(() => null);
-    getConfig().catch(() => {});
+    getConfig()
+      .then((cfg) => {
+        // Si se abrió desde otra dirección de Vercel (de un deploy o de una rama),
+        // pasa a la principal: ahí funciona Google y la sesión de siempre.
+        const main = cfg.publicUrl;
+        if (main && location.hostname.endsWith('.vercel.app') && location.origin !== main) {
+          location.replace(main + location.pathname + location.search + location.hash);
+        }
+      })
+      .catch(() => {});
     if (hadSession) {
-      $app.replaceChildren(h('div', { class: 'boot' }, svg(BRAND_TAG), h('span', {}, 'Cargando tus intercambios…')));
+      $app.replaceChildren(h('div', { class: 'boot' }, svg(BRAND_TAG), h('span', {}, t('Cargando tus intercambios…'))));
     } else {
       // Lo más probable es que no haya sesión: la pantalla de entrada aparece de inmediato.
       loadGoogleScript().catch(() => {});

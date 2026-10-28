@@ -23,7 +23,15 @@ const IS_PROD = process.env.NODE_ENV === 'production' || ON_VERCEL;
 const GOOGLE_CLIENT_ID = (process.env.GOOGLE_CLIENT_ID || '').trim();
 // Inicio de sesión de prueba (sin Google), solo para desarrollo local.
 const DEV_LOGIN = !IS_PROD && process.env.DEV_LOGIN === 'true';
-const SESSION_DAYS = 30;
+// Dirección pública principal. En Vercel sale sola de VERCEL_PROJECT_PRODUCTION_URL;
+// los enlaces de invitación siempre apuntan aquí (las otras direcciones de Vercel están
+// protegidas y quien no tiene cuenta de Vercel recibe un error 401).
+const PUBLIC_URL = (
+  process.env.PUBLIC_URL || (process.env.VERCEL_PROJECT_PRODUCTION_URL ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}` : '')
+)
+  .trim()
+  .replace(/\/+$/, '');
+const SESSION_DAYS = 180; // se renueva sola mientras se use (ver middleware de sesión)
 const MAX_MEMBERS = 100;
 const MAX_ITEMS = 30;
 const MAX_PHOTO_MB = 4; // Vercel acepta como máximo 4.5 MB por petición
@@ -61,6 +69,15 @@ app.use(
     referrerPolicy: { policy: 'strict-origin-when-cross-origin' },
   })
 );
+// Idioma de los mensajes: el que manda la interfaz (X-Lang); si no, el del navegador.
+const LANGS = ['es', 'en'];
+app.use((req, res, next) => {
+  const h = String(req.get('X-Lang') || '').toLowerCase();
+  req.lang = LANGS.includes(h) ? h : /^en\b/i.test(req.get('Accept-Language') || '') ? 'en' : 'es';
+  next();
+});
+const tr = (req, es, en) => (req.lang === 'en' ? en : es);
+
 app.use(express.json({ limit: '100kb' }));
 app.use(cookieParser());
 
@@ -69,7 +86,7 @@ app.use(cookieParser());
 app.use('/api', (req, res, next) => {
   if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) return next();
   if (req.get('X-Requested-With') !== 'intercambio') {
-    return res.status(403).json({ error: 'Solicitud no permitida.' });
+    return res.status(403).json({ error: tr(req, 'Solicitud no permitida.', 'Request not allowed.') });
   }
   next();
 });
@@ -81,43 +98,48 @@ const authLimiter = rateLimit({
   limit: IS_PROD ? 30 : 500,
   standardHeaders: 'draft-7',
   legacyHeaders: false,
-  message: { error: 'Demasiados intentos de inicio de sesión. Espera unos minutos.' },
+  message: (req) => ({
+    error: tr(req, 'Demasiados intentos de inicio de sesión. Espera unos minutos.', 'Too many sign-in attempts. Please wait a few minutes.'),
+  }),
 });
 
 // ---------------------------------------------------------------------------
 // Utilidades
 // ---------------------------------------------------------------------------
 class HttpError extends Error {
-  constructor(status, message) {
-    super(message);
+  constructor(status, es, en) {
+    super(es);
     this.status = status;
+    this.en = en || es;
   }
 }
-const fail = (status, message) => {
-  throw new HttpError(status, message);
+// fail(estado, 'mensaje en español', 'message in English')
+const fail = (status, es, en) => {
+  throw new HttpError(status, es, en);
 };
 const wrap = (fn) => (req, res, next) => Promise.resolve().then(() => fn(req, res, next)).catch(next);
 const cap = (s) => s[0].toUpperCase() + s.slice(1);
 
-function str(v, label, { max = 100, required = false } = {}) {
+// Las etiquetas van en los dos idiomas, por ejemplo ['la fecha', 'the date'].
+function str(v, [es, en], { max = 100, required = false } = {}) {
   if (v === undefined || v === null) v = '';
-  if (typeof v !== 'string') fail(400, `Valor inválido en ${label}.`);
+  if (typeof v !== 'string') fail(400, `Valor inválido en ${es}.`, `Invalid value for ${en}.`);
   v = v.trim().replace(/\s+/g, ' ');
-  if (required && !v) fail(400, `Falta ${label}.`);
-  if (v.length > max) fail(400, `${cap(label)} es demasiado largo (máx. ${max} caracteres).`);
+  if (required && !v) fail(400, `Falta ${es}.`, `${cap(en)} is required.`);
+  if (v.length > max) fail(400, `${cap(es)} es demasiado largo (máx. ${max} caracteres).`, `${cap(en)} is too long (max ${max} characters).`);
   return v;
 }
-function longText(v, label, max = 500) {
+function longText(v, [es, en], max = 500) {
   if (v === undefined || v === null) return '';
-  if (typeof v !== 'string') fail(400, `Valor inválido en ${label}.`);
+  if (typeof v !== 'string') fail(400, `Valor inválido en ${es}.`, `Invalid value for ${en}.`);
   v = v.trim();
-  if (v.length > max) fail(400, `${cap(label)} es demasiado largo (máx. ${max} caracteres).`);
+  if (v.length > max) fail(400, `${cap(es)} es demasiado largo (máx. ${max} caracteres).`, `${cap(en)} is too long (max ${max} characters).`);
   return v;
 }
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 function email(v) {
-  const e = str(v, 'el correo', { max: 254, required: true }).toLowerCase();
-  if (!EMAIL_RE.test(e)) fail(400, `“${e}” no es un correo válido.`);
+  const e = str(v, ['el correo', 'the email'], { max: 254, required: true }).toLowerCase();
+  if (!EMAIL_RE.test(e)) fail(400, `“${e}” no es un correo válido.`, `“${e}” is not a valid email.`);
   return e;
 }
 // Correo opcional: vacío → null.
@@ -127,47 +149,50 @@ function optEmail(v) {
 }
 const newInviteToken = () => crypto.randomBytes(16).toString('base64url');
 const TOKEN_RE = /^[A-Za-z0-9_-]{16,64}$/;
-const INVITE_INVALID = 'Este enlace ya no es válido. Pídele el enlace actual a quien organiza el intercambio.';
+const INVITE_INVALID = [
+  'Este enlace ya no es válido. Pídele el enlace actual a quien organiza el intercambio.',
+  'This link is no longer valid. Ask the organizer for the current link.',
+];
 const nameKey = (s) => s.toLocaleLowerCase('es');
 
-function money(v, label) {
+function money(v, [es, en]) {
   if (v === undefined || v === null || v === '') return null;
   const n = Number(String(v).replace(/[$,\s]/g, ''));
-  if (!Number.isFinite(n) || n < 0 || n > 1e8) fail(400, `${label} debe ser un número positivo.`);
+  if (!Number.isFinite(n) || n < 0 || n > 1e8) fail(400, `${es} debe ser un número positivo.`, `${en} must be a positive number.`);
   return Math.round(n * 100) / 100;
 }
 function link(v) {
-  const s = str(v, 'el link', { max: 2000 });
+  const s = str(v, ['el link', 'the link'], { max: 2000 });
   if (!s) return null;
   let u;
   try {
     u = new URL(/^https?:\/\//i.test(s) ? s : `https://${s}`);
   } catch {
-    fail(400, 'El link no es una dirección web válida.');
+    fail(400, 'El link no es una dirección web válida.', 'The link is not a valid web address.');
   }
-  if (!['http:', 'https:'].includes(u.protocol)) fail(400, 'El link debe empezar con http:// o https://');
+  if (!['http:', 'https:'].includes(u.protocol)) fail(400, 'El link debe empezar con http:// o https://', 'The link must start with http:// or https://');
   return u.toString();
 }
 function isoDate(v) {
-  const s = str(v, 'la fecha', { max: 10 });
+  const s = str(v, ['la fecha', 'the date'], { max: 10 });
   if (!s) return null;
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(s) || Number.isNaN(Date.parse(s))) fail(400, 'La fecha no es válida.');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s) || Number.isNaN(Date.parse(s))) fail(400, 'La fecha no es válida.', 'The date is not valid.');
   return s;
 }
 function currency(v) {
-  const c = str(v, 'la moneda', { max: 3 }).toUpperCase() || 'MXN';
-  if (!CURRENCIES.includes(c)) fail(400, 'Moneda no soportada.');
+  const c = str(v, ['la moneda', 'the currency'], { max: 3 }).toUpperCase() || 'MXN';
+  if (!CURRENCIES.includes(c)) fail(400, 'Moneda no soportada.', 'Unsupported currency.');
   return c;
 }
 function idParam(v) {
   const n = Number.parseInt(v, 10);
-  if (!Number.isSafeInteger(n) || n <= 0 || String(n) !== String(v)) fail(404, 'No encontrado.');
+  if (!Number.isSafeInteger(n) || n <= 0 || String(n) !== String(v)) fail(404, 'No encontrado.', 'Not found.');
   return n;
 }
 
 // Configuración pública: no necesita la base de datos, así la pantalla de entrada no espera.
 app.get('/api/config', (req, res) => {
-  res.json({ googleClientId: GOOGLE_CLIENT_ID || null, devLogin: DEV_LOGIN });
+  res.json({ googleClientId: GOOGLE_CLIENT_ID || null, devLogin: DEV_LOGIN, publicUrl: PUBLIC_URL || null });
 });
 
 // Espera a que existan las tablas antes de atender cualquier otra petición de la API.
@@ -184,12 +209,15 @@ app.use(
 // ---------------------------------------------------------------------------
 const sha256 = (t) => crypto.createHash('sha256').update(t).digest('hex');
 
+const SESSION_MS = SESSION_DAYS * 24 * 60 * 60 * 1000;
+const setSessionCookie = (res, token) =>
+  res.cookie('sid', token, { httpOnly: true, sameSite: 'lax', secure: IS_PROD, maxAge: SESSION_MS, path: '/' });
+
 async function startSession(res, userId) {
   const token = crypto.randomBytes(32).toString('base64url');
-  const maxAge = SESSION_DAYS * 24 * 60 * 60 * 1000;
   await db.run('DELETE FROM sessions WHERE expires_at < now()'); // limpieza
-  await db.run('INSERT INTO sessions (token_hash, user_id, expires_at) VALUES (?, ?, ?)', sha256(token), userId, new Date(Date.now() + maxAge));
-  res.cookie('sid', token, { httpOnly: true, sameSite: 'lax', secure: IS_PROD, maxAge, path: '/' });
+  await db.run('INSERT INTO sessions (token_hash, user_id, expires_at) VALUES (?, ?, ?)', sha256(token), userId, new Date(Date.now() + SESSION_MS));
+  setSessionCookie(res, token);
 }
 
 app.use(
@@ -197,18 +225,28 @@ app.use(
   wrap(async (req, res, next) => {
     const token = req.cookies.sid;
     if (token) {
-      req.user = await db.get(
-        `SELECT u.* FROM sessions s JOIN users u ON u.id = s.user_id
+      const row = await db.get(
+        `SELECT u.*, s.expires_at AS session_expires FROM sessions s JOIN users u ON u.id = s.user_id
          WHERE s.token_hash = ? AND s.expires_at > now()`,
         sha256(token)
       );
+      if (row) {
+        // Sesión renovable: en un dispositivo que se sigue usando, nunca hay que volver a entrar.
+        // Se renueva como máximo una vez al día para no escribir en cada petición.
+        if (new Date(row.session_expires).getTime() - Date.now() < SESSION_MS - 24 * 60 * 60 * 1000) {
+          await db.run('UPDATE sessions SET expires_at = ? WHERE token_hash = ?', new Date(Date.now() + SESSION_MS), sha256(token));
+          setSessionCookie(res, token);
+        }
+        delete row.session_expires;
+        req.user = row;
+      }
     }
     next();
   })
 );
 
 const requireUser = (req, res, next) =>
-  req.user ? next() : res.status(401).json({ error: 'Inicia sesión para continuar.' });
+  req.user ? next() : res.status(401).json({ error: tr(req, 'Inicia sesión para continuar.', 'Please sign in to continue.') });
 
 async function upsertUser({ email: mail, sub = null, name = null, picture = null }) {
   if (sub) {
@@ -265,17 +303,17 @@ app.post(
   '/api/auth/google',
   authLimiter,
   wrap(async (req, res) => {
-    if (!GOOGLE_CLIENT_ID) fail(500, 'El inicio de sesión con Google no está configurado (falta GOOGLE_CLIENT_ID).');
-    const credential = str(req.body.credential, 'la credencial', { max: 5000, required: true });
+    if (!GOOGLE_CLIENT_ID) fail(500, 'El inicio de sesión con Google no está configurado (falta GOOGLE_CLIENT_ID).', 'Google sign-in is not configured (GOOGLE_CLIENT_ID is missing).');
+    const credential = str(req.body.credential, ['la credencial', 'the credential'], { max: 5000, required: true });
     let payload;
     try {
       const ticket = await googleClient.verifyIdToken({ idToken: credential, audience: GOOGLE_CLIENT_ID });
       payload = ticket.getPayload();
     } catch {
-      fail(401, 'No se pudo verificar tu cuenta de Google. Intenta de nuevo.');
+      fail(401, 'No se pudo verificar tu cuenta de Google. Intenta de nuevo.', "We couldn't verify your Google account. Please try again.");
     }
     if (!payload || !payload.email || !payload.email_verified) {
-      fail(401, 'Tu cuenta de Google no tiene un correo verificado.');
+      fail(401, 'Tu cuenta de Google no tiene un correo verificado.', "Your Google account doesn't have a verified email.");
     }
     const user = await upsertUser({
       email: payload.email.toLowerCase(),
@@ -319,17 +357,17 @@ app.get('/api/me', (req, res) => res.json({ user: req.user ? publicUser(req.user
 async function groupAccess(groupId, user) {
   const g = await db.get('SELECT * FROM gift_groups WHERE id = ?', groupId);
   // Respondemos 404 (no 403) para no revelar que el grupo existe.
-  if (!g) fail(404, 'Ese grupo no existe o no formas parte de él.');
+  if (!g) fail(404, 'Ese grupo no existe o no formas parte de él.', "That exchange doesn't exist or you're not part of it.");
   const me = await db.get('SELECT * FROM members WHERE group_id = ? AND user_id = ?', g.id, user.id);
   const isOrganizer = g.organizer_id === user.id;
-  if (!me && !isOrganizer) fail(404, 'Ese grupo no existe o no formas parte de él.');
+  if (!me && !isOrganizer) fail(404, 'Ese grupo no existe o no formas parte de él.', "That exchange doesn't exist or you're not part of it.");
   return { g, me, isOrganizer };
 }
 const requireOrganizer = (a) => {
-  if (!a.isOrganizer) fail(403, 'Solo quien organiza el grupo puede hacer esto.');
+  if (!a.isOrganizer) fail(403, 'Solo quien organiza el grupo puede hacer esto.', 'Only the organizer can do this.');
 };
 const requireNotDrawn = (g) => {
-  if (g.drawn_at) fail(409, 'El sorteo ya se hizo. Reinícialo primero para cambiar quién participa.');
+  if (g.drawn_at) fail(409, 'El sorteo ya se hizo. Reinícialo primero para cambiar quién participa.', 'The draw is already done. Reset it first to change who takes part.');
 };
 
 async function itemsFor(memberId) {
@@ -354,12 +392,12 @@ async function assertNameFree(q, groupId, name, exceptId = 0) {
     name,
     exceptId
   );
-  if (clash) fail(409, `Ya hay alguien llamado “${name}” en este intercambio. Usa un nombre distinto, por ejemplo con apellido.`);
+  if (clash) fail(409, `Ya hay alguien llamado “${name}” en este intercambio. Usa un nombre distinto, por ejemplo con apellido.`, `There's already someone called “${name}” in this exchange. Use a different name, for example with a last name.`);
 }
 
 async function assertEmailFree(q, groupId, mail, exceptId = 0) {
   const clash = await q.get('SELECT 1 FROM members WHERE group_id = ? AND email = ? AND id <> ?', groupId, mail, exceptId);
-  if (clash) fail(409, `El correo ${mail} ya está registrado para otra persona de este intercambio.`);
+  if (clash) fail(409, `El correo ${mail} ya está registrado para otra persona de este intercambio.`, `The email ${mail} is already registered for someone else in this exchange.`);
 }
 
 // Nombre del organizador: el que tiene en el grupo, o el de su cuenta de Google.
@@ -406,27 +444,27 @@ app.post(
   requireUser,
   wrap(async (req, res) => {
     const b = req.body || {};
-    const name = str(b.name, 'el nombre del grupo', { max: 80, required: true });
-    const description = longText(b.description, 'la descripción');
-    const budget = money(b.budget, 'El presupuesto');
+    const name = str(b.name, ['el nombre del grupo', 'the group name'], { max: 80, required: true });
+    const description = longText(b.description, ['la descripción', 'the description']);
+    const budget = money(b.budget, ['El presupuesto', 'The budget']);
     const cur = currency(b.currency);
     const eventDate = isoDate(b.eventDate);
     // El organizador puede participar (queda ligado a su nombre desde el inicio) o solo organizar.
-    const me = b.me && typeof b.me === 'object' && b.me.participate ? str(b.me.name, 'tu nombre', { max: 60, required: true }) : null;
+    const me = b.me && typeof b.me === 'object' && b.me.participate ? str(b.me.name, ['tu nombre', 'your name'], { max: 60, required: true }) : null;
     const list = Array.isArray(b.participants) ? b.participants : [];
-    if (list.length + (me ? 1 : 0) > MAX_MEMBERS) fail(400, `Máximo ${MAX_MEMBERS} participantes por grupo.`);
+    if (list.length + (me ? 1 : 0) > MAX_MEMBERS) fail(400, `Máximo ${MAX_MEMBERS} participantes por grupo.`, `Maximum ${MAX_MEMBERS} participants per exchange.`);
     const seenNames = new Set();
     const seenEmails = new Set();
     const addName = (n) => {
-      if (seenNames.has(nameKey(n))) fail(400, `El nombre “${n}” está repetido. Usa nombres distintos para que cada quien encuentre el suyo.`);
+      if (seenNames.has(nameKey(n))) fail(400, `El nombre “${n}” está repetido. Usa nombres distintos para que cada quien encuentre el suyo.`, `The name “${n}” is repeated. Use different names so everyone can find theirs.`);
       seenNames.add(nameKey(n));
     };
     if (me) addName(me);
     const participants = list.map((p) => {
-      const pName = str(p && p.name, 'el nombre del participante', { max: 60, required: true });
+      const pName = str(p && p.name, ['el nombre del participante', 'the participant name'], { max: 60, required: true });
       addName(pName);
       const pEmail = optEmail(p && p.email); // opcional, por compatibilidad
-      if (pEmail && seenEmails.has(pEmail)) fail(400, `El correo ${pEmail} está repetido.`);
+      if (pEmail && seenEmails.has(pEmail)) fail(400, `El correo ${pEmail} está repetido.`, `The email ${pEmail} is repeated.`);
       if (pEmail) seenEmails.add(pEmail);
       return { name: pName, email: pEmail };
     });
@@ -511,9 +549,9 @@ app.patch(
     requireOrganizer(a);
     const b = req.body || {};
     const next = {
-      name: 'name' in b ? str(b.name, 'el nombre del grupo', { max: 80, required: true }) : a.g.name,
-      description: 'description' in b ? longText(b.description, 'la descripción') : a.g.description,
-      budget: 'budget' in b ? money(b.budget, 'El presupuesto') : a.g.budget,
+      name: 'name' in b ? str(b.name, ['el nombre del grupo', 'the group name'], { max: 80, required: true }) : a.g.name,
+      description: 'description' in b ? longText(b.description, ['la descripción', 'the description']) : a.g.description,
+      budget: 'budget' in b ? money(b.budget, ['El presupuesto', 'The budget']) : a.g.budget,
       currency: 'currency' in b ? currency(b.currency) : a.g.currency,
       eventDate: 'eventDate' in b ? isoDate(b.eventDate) : a.g.event_date,
     };
@@ -553,10 +591,10 @@ app.post(
     const a = await groupAccess(idParam(req.params.id), req.user);
     requireOrganizer(a);
     requireNotDrawn(a.g);
-    const name = str(req.body.name, 'el nombre', { max: 60, required: true });
+    const name = str(req.body.name, ['el nombre', 'the name'], { max: 60, required: true });
     const mail = optEmail(req.body.email);
     const { n } = await db.get('SELECT COUNT(*)::int AS n FROM members WHERE group_id = ?', a.g.id);
-    if (n >= MAX_MEMBERS) fail(400, `Máximo ${MAX_MEMBERS} participantes por grupo.`);
+    if (n >= MAX_MEMBERS) fail(400, `Máximo ${MAX_MEMBERS} participantes por grupo.`, `Maximum ${MAX_MEMBERS} participants per exchange.`);
     await assertNameFree(db, a.g.id, name);
     if (mail) await assertEmailFree(db, a.g.id, mail);
     await db.run('INSERT INTO members (group_id, display_name, email) VALUES (?, ?, ?)', a.g.id, name, mail);
@@ -572,8 +610,8 @@ app.patch(
     const a = await groupAccess(idParam(req.params.id), req.user);
     requireOrganizer(a);
     const m = await db.get('SELECT * FROM members WHERE id = ? AND group_id = ?', idParam(req.params.mid), a.g.id);
-    if (!m) fail(404, 'Ese participante no existe.');
-    const name = 'name' in req.body ? str(req.body.name, 'el nombre', { max: 60, required: true }) : m.display_name;
+    if (!m) fail(404, 'Ese participante no existe.', "That participant doesn't exist.");
+    const name = 'name' in req.body ? str(req.body.name, ['el nombre', 'the name'], { max: 60, required: true }) : m.display_name;
     const mail = 'email' in req.body ? optEmail(req.body.email) : m.email;
     await assertNameFree(db, a.g.id, name, m.id);
     if (mail && mail !== m.email) await assertEmailFree(db, a.g.id, mail, m.id);
@@ -593,7 +631,7 @@ app.post(
     const a = await groupAccess(idParam(req.params.id), req.user);
     requireOrganizer(a);
     const m = await db.get('SELECT id FROM members WHERE id = ? AND group_id = ?', idParam(req.params.mid), a.g.id);
-    if (!m) fail(404, 'Ese participante no existe.');
+    if (!m) fail(404, 'Ese participante no existe.', "That participant doesn't exist.");
     // Si el correo registrado es el de la cuenta que se libera, se borra (si no, se volvería
     // a ligar sola). Si es otro, se conserva y esa persona queda ligada en cuanto entre.
     await db.run(
@@ -615,7 +653,7 @@ app.delete(
     requireOrganizer(a);
     requireNotDrawn(a.g);
     const m = await db.get('SELECT * FROM members WHERE id = ? AND group_id = ?', idParam(req.params.mid), a.g.id);
-    if (!m) fail(404, 'Ese participante no existe.');
+    if (!m) fail(404, 'Ese participante no existe.', "That participant doesn't exist.");
     await db.transaction(async (tx) => {
       await tx.run('DELETE FROM wishlist_items WHERE member_id = ?', m.id);
       await tx.run('DELETE FROM members WHERE id = ?', m.id);
@@ -640,9 +678,9 @@ app.post(
 // Un solo enlace para todos. Quien lo abre entra con Google y elige su nombre
 // de la lista que escribió el organizador. Cada nombre se puede elegir una vez.
 async function findGroupByInvite(q, token) {
-  if (!TOKEN_RE.test(String(token))) fail(404, INVITE_INVALID);
+  if (!TOKEN_RE.test(String(token))) fail(404, ...INVITE_INVALID);
   const g = await q.get('SELECT id, name, organizer_id, event_date FROM gift_groups WHERE invite_token = ?', token);
-  if (!g) fail(404, INVITE_INVALID);
+  if (!g) fail(404, ...INVITE_INVALID);
   return g;
 }
 
@@ -682,21 +720,21 @@ app.post(
   requireUser,
   wrap(async (req, res) => {
     const memberId = Number(req.body && req.body.memberId);
-    if (!Number.isSafeInteger(memberId) || memberId <= 0) fail(400, 'Elige tu nombre de la lista.');
+    if (!Number.isSafeInteger(memberId) || memberId <= 0) fail(400, 'Elige tu nombre de la lista.', 'Pick your name from the list.');
     const result = await db.transaction(async (tx) => {
       const g = await findGroupByInvite(tx, req.params.token);
       // FOR UPDATE: si dos personas eligen el mismo nombre a la vez, solo una gana.
       const m = await tx.get('SELECT id, display_name, user_id, email FROM members WHERE id = ? AND group_id = ? FOR UPDATE', memberId, g.id);
-      if (!m) fail(404, 'Ese nombre ya no está en el intercambio. Recarga la página.');
+      if (!m) fail(404, 'Ese nombre ya no está en el intercambio. Recarga la página.', 'That name is no longer in the exchange. Reload the page.');
       if (m.user_id === req.user.id) return { groupId: g.id, name: m.display_name };
       if (m.user_id) {
-        fail(409, `Alguien más ya eligió “${m.display_name}”. Si ese es tu nombre, avísale a quien organiza para que lo libere.`);
+        fail(409, `Alguien más ya eligió “${m.display_name}”. Si ese es tu nombre, avísale a quien organiza para que lo libere.`, `Someone else already picked “${m.display_name}”. If that's your name, ask the organizer to release it.`);
       }
       if (m.email && m.email !== req.user.email) {
-        fail(409, `“${m.display_name}” está reservado para otra cuenta de Google. Si eres tú, entra con el correo que registró quien organiza, o pídele que lo cambie.`);
+        fail(409, `“${m.display_name}” está reservado para otra cuenta de Google. Si eres tú, entra con el correo que registró quien organiza, o pídele que lo cambie.`, `“${m.display_name}” is reserved for another Google account. If it's you, sign in with the email the organizer registered, or ask them to change it.`);
       }
       const mine = await tx.get('SELECT display_name FROM members WHERE group_id = ? AND user_id = ?', g.id, req.user.id);
-      if (mine) fail(409, `Ya estás en este intercambio como ${mine.display_name}. Cada cuenta puede elegir un solo nombre.`);
+      if (mine) fail(409, `Ya estás en este intercambio como ${mine.display_name}. Cada cuenta puede elegir un solo nombre.`, `You're already in this exchange as ${mine.display_name}. Each account can pick only one name.`);
       await tx.run('UPDATE members SET user_id = ?, joined_at = now() WHERE id = ?', req.user.id, m.id);
       return { groupId: g.id, name: m.display_name };
     });
@@ -726,9 +764,9 @@ app.post(
     await db.transaction(async (tx) => {
       // Se vuelve a leer dentro de la transacción para evitar dos sorteos a la vez.
       const g = await tx.get('SELECT drawn_at FROM gift_groups WHERE id = ? FOR UPDATE', a.g.id);
-      if (g.drawn_at) fail(409, 'El sorteo ya se hizo.');
+      if (g.drawn_at) fail(409, 'El sorteo ya se hizo.', 'The draw is already done.');
       const ids = (await tx.all('SELECT id FROM members WHERE group_id = ?', a.g.id)).map((r) => r.id);
-      if (ids.length < 3) fail(400, 'Se necesitan al menos 3 participantes para sortear.');
+      if (ids.length < 3) fail(400, 'Se necesitan al menos 3 participantes para sortear.', 'You need at least 3 participants to do the draw.');
       for (const [giver, receiver] of drawCircle(ids)) {
         await tx.run('UPDATE members SET receiver_id = ? WHERE id = ?', receiver, giver);
       }
@@ -772,14 +810,14 @@ function sniffImage(buf) {
 }
 function readPhoto(file) {
   const mime = sniffImage(file.buffer);
-  if (!mime) fail(400, 'La foto debe ser JPG, PNG, WEBP o GIF.');
+  if (!mime) fail(400, 'La foto debe ser JPG, PNG, WEBP o GIF.', 'The photo must be JPG, PNG, WEBP or GIF.');
   return { mime, data: Buffer.from(file.buffer), ver: crypto.randomBytes(4).toString('hex') };
 }
 
 function itemFields(body) {
   return {
-    name: str(body.name, 'el nombre del regalo', { max: 120, required: true }),
-    cost: money(body.cost, 'El costo'),
+    name: str(body.name, ['el nombre del regalo', 'the gift name'], { max: 120, required: true }),
+    cost: money(body.cost, ['El costo', 'The cost']),
     link: link(body.link),
   };
 }
@@ -790,7 +828,7 @@ async function itemAccess(itemId, user) {
      FROM wishlist_items w JOIN members m ON m.id = w.member_id WHERE w.id = ?`,
     itemId
   );
-  if (!item) fail(404, 'Ese regalo no existe.');
+  if (!item) fail(404, 'Ese regalo no existe.', "That gift doesn't exist.");
   const isOwner = item.owner_id === user.id;
   const isGiver =
     !isOwner &&
@@ -800,7 +838,7 @@ async function itemAccess(itemId, user) {
       user.id,
       item.member_id
     ));
-  if (!isOwner && !isGiver) fail(404, 'Ese regalo no existe.');
+  if (!isOwner && !isGiver) fail(404, 'Ese regalo no existe.', "That gift doesn't exist.");
   return { item, isOwner };
 }
 
@@ -810,10 +848,10 @@ app.post(
   upload.single('photo'),
   wrap(async (req, res) => {
     const { me } = await groupAccess(idParam(req.params.id), req.user);
-    if (!me) fail(403, 'No participas en este intercambio, así que no tienes wishlist aquí.');
+    if (!me) fail(403, 'No participas en este intercambio, así que no tienes wishlist aquí.', "You're not taking part in this exchange, so you don't have a wishlist here.");
     const f = itemFields(req.body || {});
     const { n } = await db.get('SELECT COUNT(*)::int AS n FROM wishlist_items WHERE member_id = ?', me.id);
-    if (n >= MAX_ITEMS) fail(400, `Máximo ${MAX_ITEMS} regalos en tu wishlist.`);
+    if (n >= MAX_ITEMS) fail(400, `Máximo ${MAX_ITEMS} regalos en tu wishlist.`, `Maximum ${MAX_ITEMS} gifts in your wishlist.`);
     const photo = req.file ? readPhoto(req.file) : null;
     await db.run(
       `INSERT INTO wishlist_items (member_id, name, cost, link, photo_mime, photo_data, photo_ver, position)
@@ -837,15 +875,15 @@ app.put(
   requireUser,
   wrap(async (req, res) => {
     const { me } = await groupAccess(idParam(req.params.id), req.user);
-    if (!me) fail(403, 'No participas en este intercambio, así que no tienes wishlist aquí.');
+    if (!me) fail(403, 'No participas en este intercambio, así que no tienes wishlist aquí.', "You're not taking part in this exchange, so you don't have a wishlist here.");
     const raw = req.body && req.body.ids;
-    if (!Array.isArray(raw) || raw.length > MAX_ITEMS) fail(400, 'Orden inválido.');
+    if (!Array.isArray(raw) || raw.length > MAX_ITEMS) fail(400, 'Orden inválido.', 'Invalid order.');
     const ids = raw.map(Number);
-    if (ids.some((n) => !Number.isSafeInteger(n))) fail(400, 'Orden inválido.');
+    if (ids.some((n) => !Number.isSafeInteger(n))) fail(400, 'Orden inválido.', 'Invalid order.');
     await db.transaction(async (tx) => {
       const current = (await tx.all('SELECT id FROM wishlist_items WHERE member_id = ? FOR UPDATE', me.id)).map((r) => r.id);
       const same = ids.length === current.length && new Set(ids).size === ids.length && ids.every((id) => current.includes(id));
-      if (!same) fail(409, 'Tu wishlist cambió mientras la ordenabas. Recarga la página e intenta de nuevo.');
+      if (!same) fail(409, 'Tu wishlist cambió mientras la ordenabas. Recarga la página e intenta de nuevo.', 'Your wishlist changed while you were sorting it. Reload the page and try again.');
       for (let i = 0; i < ids.length; i++) {
         await tx.run('UPDATE wishlist_items SET position = ? WHERE id = ? AND member_id = ?', i + 1, ids[i], me.id);
       }
@@ -860,7 +898,7 @@ app.patch(
   upload.single('photo'),
   wrap(async (req, res) => {
     const { item, isOwner } = await itemAccess(idParam(req.params.itemId), req.user);
-    if (!isOwner) fail(403, 'Solo puedes editar tu propia wishlist.');
+    if (!isOwner) fail(403, 'Solo puedes editar tu propia wishlist.', 'You can only edit your own wishlist.');
     const f = itemFields(req.body || {});
     await db.run('UPDATE wishlist_items SET name = ?, cost = ?, link = ? WHERE id = ?', f.name, f.cost, f.link, item.id);
     if (req.file) {
@@ -878,7 +916,7 @@ app.delete(
   requireUser,
   wrap(async (req, res) => {
     const { item, isOwner } = await itemAccess(idParam(req.params.itemId), req.user);
-    if (!isOwner) fail(403, 'Solo puedes borrar regalos de tu propia wishlist.');
+    if (!isOwner) fail(403, 'Solo puedes borrar regalos de tu propia wishlist.', 'You can only delete gifts from your own wishlist.');
     await db.run('DELETE FROM wishlist_items WHERE id = ?', item.id);
     res.json({ ok: true });
   })
@@ -891,7 +929,7 @@ app.get(
   wrap(async (req, res) => {
     const { item } = await itemAccess(idParam(req.params.itemId), req.user);
     const row = item.photo_ver && (await db.get('SELECT photo_mime, photo_data FROM wishlist_items WHERE id = ?', item.id));
-    if (!row || !row.photo_data) fail(404, 'Ese regalo no tiene foto.');
+    if (!row || !row.photo_data) fail(404, 'Ese regalo no tiene foto.', "That gift doesn't have a photo.");
     res.set('Cache-Control', 'private, max-age=86400');
     res.type(row.photo_mime).send(Buffer.from(row.photo_data));
   })
@@ -900,23 +938,28 @@ app.get(
 // ---------------------------------------------------------------------------
 // Archivos estáticos y errores
 // ---------------------------------------------------------------------------
-app.use('/api', (req, res) => res.status(404).json({ error: 'No encontrado.' }));
+app.use('/api', (req, res) => res.status(404).json({ error: tr(req, 'No encontrado.', 'Not found.') }));
 // En Vercel la carpeta public/ la sirve su CDN; esto es para correrlo localmente.
 app.use(express.static(path.join(__dirname, 'public'), { extensions: ['html'] }));
 
 // eslint-disable-next-line no-unused-vars
 app.use((err, req, res, next) => {
   if (err instanceof multer.MulterError) {
-    const msg = err.code === 'LIMIT_FILE_SIZE' ? `La foto pesa más de ${MAX_PHOTO_MB} MB.` : 'No se pudo subir la foto.';
+    const msg =
+      err.code === 'LIMIT_FILE_SIZE'
+        ? tr(req, `La foto pesa más de ${MAX_PHOTO_MB} MB.`, `The photo is larger than ${MAX_PHOTO_MB} MB.`)
+        : tr(req, 'No se pudo subir la foto.', "The photo couldn't be uploaded.");
     return res.status(400).json({ error: msg });
   }
-  if (err && err.type === 'entity.parse.failed') return res.status(400).json({ error: 'Solicitud inválida.' });
-  if (err instanceof HttpError) return res.status(err.status).json({ error: err.message });
+  if (err && err.type === 'entity.parse.failed') return res.status(400).json({ error: tr(req, 'Solicitud inválida.', 'Invalid request.') });
+  if (err instanceof HttpError) return res.status(err.status).json({ error: tr(req, err.message, err.en) });
   if (err && err.code === '23505') {
-    return res.status(409).json({ error: 'Ese cambio choca con otro participante. Recarga la página e intenta de nuevo.' });
+    return res.status(409).json({
+      error: tr(req, 'Ese cambio choca con otro participante. Recarga la página e intenta de nuevo.', 'That change conflicts with another participant. Reload the page and try again.'),
+    });
   }
   console.error(err);
-  res.status(500).json({ error: 'Algo falló en el servidor. Intenta de nuevo.' });
+  res.status(500).json({ error: tr(req, 'Algo falló en el servidor. Intenta de nuevo.', 'Something went wrong on the server. Please try again.') });
 });
 
 // Localmente arranca el servidor; en Vercel se usa la app exportada.

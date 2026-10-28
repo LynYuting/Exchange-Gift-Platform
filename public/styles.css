@@ -531,3 +531,50 @@ dialog.photo-viewer::backdrop { background: rgba(10, 22, 18, 0.9); }
 .name-tag:disabled .name-tag-name { color: var(--gris); text-decoration: line-through; text-decoration-thickness: 1px; }
 .name-tag.reserved .name-tag-name { text-decoration: none; }
 .join-foot { font-size: 15px; }
+
+/* ---------- Idioma (ES / EN) ---------- */
+.lang-switch {
+  display: inline-flex; gap: 2px; padding: 3px; border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08); border: 1px solid rgba(255, 255, 255, 0.2);
+}
+.lang-opt {
+  border: 0; background: transparent; color: #cfe0d8; cursor: pointer;
+  font: 600 12px/1 var(--sans); letter-spacing: 0.04em; padding: 7px 11px; border-radius: 999px;
+}
+.lang-opt[aria-pressed='true'] { background: var(--nieve); color: var(--pino); }
+.lang-opt:hover:not([aria-pressed='true']) { color: #fff; background: rgba(255, 255, 255, 0.12); }
+.login { position: relative; }
+.login > .lang-switch { position: absolute; top: 18px; right: 18px; }
+@media (min-width: 901px) {
+  .side .lang-switch { order: 98; margin-top: auto; align-self: flex-start; margin-left: 8px; }
+  .side .user-box { margin-top: 0; }
+}
+@media (max-width: 900px) {
+  .side-top .brand { order: 0; }
+  .side-top .lang-switch { order: 1; margin-left: auto; }
+  .side-top .user-box { order: 2; min-width: 0; }
+  .side-top { gap: 8px; }
+}
+
+/* ---------- Cuenta recordada en la pantalla de entrada ---------- */
+.remembered {
+  display: flex; align-items: center; gap: 12px; width: min(380px, 100%);
+  padding: 12px 16px 12px 12px; background: var(--papel); border-radius: var(--r-md);
+}
+.remembered .avatar { width: 42px; height: 42px; font-size: 17px; }
+.remembered .who { display: flex; flex-direction: column; min-width: 0; }
+.remembered strong { font-weight: 600; }
+.remembered span { font-size: 14px; color: var(--gris); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.legal .lang-link { font-size: 15px; }
+@media (max-width: 900px) {
+  .shell { grid-template-columns: minmax(0, 1fr); }
+  .side-top .brand { font-size: 18px; white-space: nowrap; padding: 0; }
+  .side-top .user-box .who { display: none; } /* en el teléfono basta con la foto */
+  .side-top .user-box .btn-text { white-space: nowrap; }
+  .side-top .lang-opt { padding: 6px 8px; }
+}
+@media (max-width: 380px) {
+  .side-top .brand-name { display: none; } /* pantallas muy angostas: solo el ícono */
+}
+.photo-pick > div { min-width: 0; flex: 1; }
+.photo-pick input[type='file'] { width: 100%; }
