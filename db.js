@@ -125,21 +125,34 @@ CREATE TABLE IF NOT EXISTS gift_groups (
   event_date    text,                        -- YYYY-MM-DD
   organizer_id  integer NOT NULL REFERENCES users(id),
   drawn_at      timestamptz,                 -- NULL = sorteo pendiente
+  invite_token  text,                        -- enlace de invitación del grupo
   created_at    timestamptz NOT NULL DEFAULT now()
 );
 
--- Cada participante del grupo. El nombre lo pone el organizador.
--- La cuenta de Google se vincula por correo al iniciar sesión.
+-- Cada participante del grupo. El nombre lo pone el organizador; cada quien
+-- abre el enlace del grupo, entra con Google y elige su nombre (user_id).
 CREATE TABLE IF NOT EXISTS members (
   id            integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   group_id      integer NOT NULL REFERENCES gift_groups(id) ON DELETE CASCADE,
   display_name  text NOT NULL,
-  email         text NOT NULL,               -- siempre en minúsculas
+  email         text,                        -- solo grupos de la versión anterior
+  user_id       integer REFERENCES users(id) ON DELETE SET NULL,  -- cuenta que eligió este nombre
   receiver_id   integer REFERENCES members(id) ON DELETE SET NULL,  -- a quién le regala
-  joined_at     timestamptz,                 -- primera vez que entró
+  joined_at     timestamptz,                 -- cuándo eligió su nombre
   created_at    timestamptz NOT NULL DEFAULT now(),
   UNIQUE (group_id, email)
 );
+
+-- Migración desde la versión anterior (correo obligatorio, sin enlace de grupo).
+ALTER TABLE gift_groups ADD COLUMN IF NOT EXISTS invite_token text;
+UPDATE gift_groups SET invite_token = replace(gen_random_uuid()::text, '-', '') WHERE invite_token IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_groups_invite ON gift_groups(invite_token);
+ALTER TABLE members ADD COLUMN IF NOT EXISTS user_id integer REFERENCES users(id) ON DELETE SET NULL;
+ALTER TABLE members ALTER COLUMN email DROP NOT NULL;
+UPDATE members m SET user_id = u.id FROM users u WHERE m.user_id IS NULL AND m.email = u.email;
+-- Una cuenta solo puede ocupar un nombre por intercambio.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_members_group_user ON members(group_id, user_id);
+CREATE INDEX IF NOT EXISTS idx_members_user ON members(user_id);
 
 -- Las fotos se guardan en la base de datos (ya reducidas a ~1200 px).
 CREATE TABLE IF NOT EXISTS wishlist_items (
@@ -151,8 +164,19 @@ CREATE TABLE IF NOT EXISTS wishlist_items (
   photo_mime  text,
   photo_data  bytea,
   photo_ver   text,                          -- cambia con cada foto nueva (caché)
+  position    integer,                       -- orden de preferencia (1 = la favorita)
   created_at  timestamptz NOT NULL DEFAULT now()
 );
+
+-- Migración: las wishlists anteriores quedan en el orden en que se agregaron.
+ALTER TABLE wishlist_items ADD COLUMN IF NOT EXISTS position integer;
+UPDATE wishlist_items w SET position = r.rn
+FROM (
+  SELECT id, row_number() OVER (PARTITION BY member_id ORDER BY id) AS rn
+  FROM wishlist_items
+  WHERE member_id IN (SELECT member_id FROM wishlist_items WHERE position IS NULL)
+) r
+WHERE w.id = r.id;
 
 CREATE INDEX IF NOT EXISTS idx_members_email ON members(email);
 CREATE INDEX IF NOT EXISTS idx_members_group ON members(group_id);

@@ -36,6 +36,12 @@
     '<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><rect x="3" y="8" width="18" height="13" rx="1.5"/><path d="M3 12h18M12 8v13"/><path d="M12 8c-1.5-3-5-4-5.5-2S9 8 12 8zm0 0c1.5-3 5-4 5.5-2S15 8 12 8z"/></svg>';
   const ICON_X =
     '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>';
+  const ICON_GRIP =
+    '<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="9" cy="6" r="1.6"/><circle cx="15" cy="6" r="1.6"/><circle cx="9" cy="12" r="1.6"/><circle cx="15" cy="12" r="1.6"/><circle cx="9" cy="18" r="1.6"/><circle cx="15" cy="18" r="1.6"/></svg>';
+  const ICON_UP =
+    '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><path d="M6 15l6-6 6 6"/></svg>';
+  const ICON_DOWN =
+    '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>';
   const BRAND_TAG =
     '<svg width="28" height="22" viewBox="0 0 32 26" aria-hidden="true"><path d="M9 1h22v24H9L1 13z" fill="#C21F3A"/><circle cx="9" cy="13" r="2.6" fill="#17392F"/></svg>';
 
@@ -101,7 +107,21 @@
   };
   const initial = (s) => (s || '?').trim().charAt(0).toUpperCase();
 
+  const inviteUrl = (token) => `${location.origin}/#/unirse/${token}`;
+  async function copyText(text, okMsg) {
+    try {
+      await navigator.clipboard.writeText(text);
+      toast(okMsg);
+    } catch {
+      toast('No se pudo copiar automáticamente. Intenta de nuevo.', 'error');
+    }
+  }
+
   function toast(msg, kind = '') {
+    // Las ventanas modales tapan todo lo demás, así que el aviso va dentro de la de más arriba.
+    const open = [...document.querySelectorAll('dialog[open]')];
+    const host = open.length ? open[open.length - 1] : document.body;
+    if ($toasts.parentNode !== host) host.append($toasts);
     const t = h('div', { class: `toast ${kind}` }, msg);
     $toasts.append(t);
     setTimeout(() => t.remove(), kind === 'error' ? 5000 : 3000);
@@ -111,12 +131,12 @@
     return new Promise((resolve) => {
       const dlg = h(
         'dialog',
-        { 'aria-labelledby': 'dlg-title' },
+        { class: 'confirm', 'aria-labelledby': 'dlg-title' },
         h('h2', { id: 'dlg-title' }, title),
         h('p', {}, text),
         h(
           'div',
-          { class: 'actions' },
+          { class: 'dialog-actions' },
           h('button', { class: 'btn btn-ghost', type: 'button', onclick: () => dlg.close('no') }, 'Cancelar'),
           h('button', { class: `btn ${danger ? 'btn-red' : ''}`, type: 'button', onclick: () => dlg.close('yes') }, confirm)
         )
@@ -130,15 +150,18 @@
     });
   }
 
-  function showPhoto(src, alt) {
+  function showPhoto(src, caption) {
     const dlg = h(
       'dialog',
-      { class: 'photo', 'aria-label': alt },
-      h('img', { src, alt }),
-      h('button', { class: 'btn btn-sm', type: 'button', onclick: () => dlg.close() }, 'Cerrar')
+      { class: 'photo-viewer', 'aria-label': caption },
+      h('figure', {}, h('img', { src, alt: caption }), h('figcaption', {}, caption)),
+      h('button', { class: 'photo-close', type: 'button', 'aria-label': 'Cerrar foto', onclick: () => dlg.close() }, svg(ICON_X))
     );
     dlg.addEventListener('close', () => dlg.remove());
-    dlg.addEventListener('click', (e) => e.target === dlg && dlg.close());
+    // Clic fuera de la foto la cierra.
+    dlg.addEventListener('click', (e) => {
+      if (e.target === dlg || e.target.tagName === 'FIGURE') dlg.close();
+    });
     document.body.append(dlg);
     dlg.showModal();
   }
@@ -305,6 +328,21 @@
     }
     actions.append(err);
 
+    // Si llegó con el enlace del grupo, le decimos a qué lo invitaron.
+    const r = currentRoute();
+    let banner = null;
+    if (r.name === 'join') {
+      banner = h('div', { class: 'invite-banner' }, 'Revisando tu invitación…');
+      api(`/api/invites/${r.token}`)
+        .then((inv) =>
+          banner.replaceChildren(
+            h('strong', {}, `${inv.organizerName} te invitó a “${inv.groupName}”`),
+            h('span', {}, 'Entra con la cuenta de Google que quieras usar y después elige tu nombre de la lista.')
+          )
+        )
+        .catch((e) => banner.replaceChildren(h('span', {}, e.message)));
+    }
+
     $app.replaceChildren(
       h(
         'div',
@@ -314,7 +352,14 @@
           { class: 'login-copy' },
           h('h1', {}, 'Intercambio navideño'),
           h('p', {}, 'Entra con tu cuenta de Google para ver a quién le regalas y qué le gustaría recibir.'),
-          actions
+          banner,
+          actions,
+          h(
+            'p',
+            { class: 'legal-links' },
+            h('a', { href: '/privacidad.html' }, 'Política de privacidad'),
+            h('a', { href: '/terminos.html' }, 'Términos de servicio')
+          )
         ),
         h('div', { class: 'login-art', 'aria-hidden': 'true' }, giftTag({ from: 'Tú', to: '***' }))
       )
@@ -360,14 +405,19 @@
     const m = location.hash.match(/^#\/g\/(\d+)$/);
     if (m) return { name: 'group', id: Number(m[1]) };
     if (location.hash === '#/nuevo') return { name: 'create' };
+    const inv = location.hash.match(/^#\/unirse\/([A-Za-z0-9_-]{16,64})$/);
+    if (inv) return { name: 'join', token: inv[1] };
     return { name: 'home' };
   }
 
   function route() {
     if (!state.user) return;
     const r = currentRoute();
+    const adminDlg = document.getElementById('admin-dialog');
+    if (adminDlg && !(r.name === 'group' && state.detail && state.detail.group.id === r.id)) adminDlg.close();
     renderSide();
     if (r.name === 'create') return renderCreate();
+    if (r.name === 'join') return renderJoin(r.token);
     if (r.name === 'group') return showGroup(r.id);
     if (state.groups.length) return location.replace(`#/g/${state.groups[0].id}`);
     renderWelcome();
@@ -423,10 +473,76 @@
         'section',
         { class: 'welcome' },
         h('h1', {}, 'Aún no estás en ningún intercambio'),
-        h('p', {}, 'Si alguien te invitó, pídele que te registre con este correo: ', h('code', {}, state.user.email)),
-        h('p', {}, 'O crea uno y agrega a tu grupo.'),
+        h('p', {}, 'Si alguien te invitó, abre el enlace que te mandó y elige tu nombre.'),
+        h('p', {}, 'O crea uno y comparte el enlace con tu grupo.'),
         h('div', {}, h('a', { class: 'btn', href: '#/nuevo' }, 'Crear intercambio'))
       )
+    );
+  }
+
+  // Pantalla a la que llega alguien con el enlace del grupo (#/unirse/TOKEN):
+  // elige su nombre de la lista que escribió el organizador.
+  async function renderJoin(token) {
+    document.title = 'Invitación · Intercambio navideño';
+    state.detail = null;
+    state.$main.replaceChildren(h('p', { class: 'loading' }, 'Revisando tu invitación…'));
+    const message = (title, ...body) =>
+      state.$main.replaceChildren(h('section', { class: 'welcome join' }, h('h1', {}, title), ...body));
+    let inv;
+    try {
+      inv = await api(`/api/invites/${token}`);
+    } catch (e) {
+      return message('Este enlace ya no sirve', h('p', {}, e.message), h('div', {}, h('a', { class: 'btn btn-ghost', href: '#/' }, 'Ir a mis intercambios')));
+    }
+    if (inv.myName) {
+      toast(`Ya estás en “${inv.groupName}” como ${inv.myName}`);
+      return location.replace(`#/g/${inv.groupId}`);
+    }
+    if (!inv.names.some((n) => !n.taken)) {
+      return message(
+        'Ya no quedan nombres por elegir',
+        h('p', {}, `Todos los nombres de “${inv.groupName}” ya fueron elegidos. Si falta el tuyo, pídele a ${inv.organizerName} que te agregue.`),
+        h('div', {}, h('a', { class: 'btn btn-ghost', href: '#/' }, 'Ir a mis intercambios'))
+      );
+    }
+
+    const choose = async (n, btn) => {
+      const ok = await confirmDialog({
+        title: `¿Eres ${n.name}?`,
+        text: `Tu cuenta ${state.user.email} quedará ligada a este nombre y no podrás cambiarlo tú. Si te equivocas, solo ${inv.organizerName} puede corregirlo.`,
+        confirm: `Sí, soy ${n.name}`,
+      });
+      if (!ok) return;
+      btn.disabled = true;
+      try {
+        await api(`/api/invites/${token}/claim`, { method: 'POST', body: { memberId: n.id } });
+        await loadGroups();
+        toast(`¡Listo, ${n.name}! Ya estás en “${inv.groupName}”`);
+        location.hash = `#/g/${inv.groupId}`;
+      } catch (e) {
+        toast(e.message, 'error');
+        renderJoin(token); // la lista pudo cambiar: alguien más eligió ese nombre
+      }
+    };
+
+    message(
+      `Te invitaron a “${inv.groupName}”`,
+      h('p', {}, `${inv.organizerName} organiza este intercambio. Elige tu nombre: cada nombre se puede elegir una sola vez.`),
+      h(
+        'ul',
+        { class: 'name-picker' },
+        inv.names.map((n) => {
+          const btn = h(
+            'button',
+            { class: 'name-tag', type: 'button', disabled: n.taken },
+            h('span', { class: 'name-tag-name' }, n.name),
+            h('span', { class: 'name-tag-status' }, n.taken ? 'Ya lo eligieron' : 'Soy yo')
+          );
+          if (!n.taken) btn.addEventListener('click', () => choose(n, btn));
+          return h('li', {}, btn);
+        })
+      ),
+      h('p', { class: 'join-foot' }, `Si tu nombre no aparece o alguien ya eligió el tuyo, avísale a ${inv.organizerName}.`)
     );
   }
 
@@ -468,9 +584,20 @@
         participantsSection(d),
         d.me ? myWishlistSection(d) : null,
         d.receiver ? receiverWishlistSection(d) : null,
-        d.group.isOrganizer ? adminSection(d) : null,
       ].filter(Boolean)
     );
+    // El panel del organizador vive en una ventana aparte; si está abierta, se actualiza.
+    const dlg = document.getElementById('admin-dialog');
+    if (dlg && dlg.open) {
+      if (d.group.isOrganizer) fillAdmin(dlg);
+      else dlg.close();
+    }
+    if (state.openAdmin && d.group.isOrganizer) {
+      const msg = state.openAdmin;
+      state.openAdmin = false;
+      openAdmin();
+      if (typeof msg === 'string') toast(msg);
+    }
   }
 
   function groupHead(d) {
@@ -482,7 +609,12 @@
     return h(
       'header',
       { class: 'group-head' },
-      h('h1', {}, g.name),
+      h(
+        'div',
+        { class: 'group-head-top' },
+        h('h1', {}, g.name),
+        g.isOrganizer ? h('button', { class: 'btn btn-ghost', type: 'button', onclick: openAdmin }, 'Administrar intercambio') : null
+      ),
       h('dl', { class: 'group-meta' }, meta.map(([k, v]) => h('div', {}, h('dt', {}, k), h('dd', {}, v)))),
       g.description ? h('p', { class: 'group-desc' }, g.description) : null
     );
@@ -496,7 +628,7 @@
         { 'aria-label': 'Tu papel en el intercambio' },
         giftTag({
           single: 'Organizas este intercambio',
-          note: 'No estás en la lista de participantes, así que no entras al sorteo. Si quieres participar, agrégate abajo con tu correo.',
+          note: 'No estás entre los participantes, así que no entras al sorteo. Si quieres participar, abre “Administrar intercambio”, agrega tu nombre y pulsa “Soy yo”.',
         })
       );
     }
@@ -561,18 +693,17 @@
   }
 
   // ---- Wishlist ----
-  function itemRow(item, { own, currency }) {
-    const li = h('li', { class: 'item' });
+  function itemRow(item, { own, currency, rank }) {
+    const li = h('li', { class: `item${own ? ' own' : ''}`, 'data-id': item.id });
     const thumb = h(
       'div',
       { class: 'thumb' },
       item.photoUrl
-        ? h('img', {
-            src: item.photoUrl,
-            alt: `Foto de ${item.name}`,
-            loading: 'lazy',
-            onclick: () => showPhoto(item.photoUrl, `Foto de ${item.name}`),
-          })
+        ? h(
+            'button',
+            { class: 'thumb-btn', type: 'button', 'aria-label': `Ver foto de ${item.name}`, onclick: () => showPhoto(item.photoUrl, item.name) },
+            h('img', { src: item.photoUrl, alt: '', loading: 'lazy' })
+          )
         : svg(ICON_GIFT)
     );
     const sub = h(
@@ -581,69 +712,157 @@
       item.cost !== null ? h('span', { class: 'item-cost' }, fmtMoney(item.cost, currency)) : h('span', {}, 'Sin precio'),
       item.link ? h('a', { href: item.link, target: '_blank', rel: 'noopener noreferrer nofollow' }, `Ver en ${hostOf(item.link)}`) : null
     );
-    li.append(thumb, h('div', {}, h('p', { class: 'item-name' }, item.name), sub));
-    if (own) {
-      li.append(
+    li.append(h('span', { class: 'rank', 'aria-label': `Preferencia ${rank}` }, String(rank)), thumb, h('div', { class: 'item-info' }, h('p', { class: 'item-name' }, item.name), sub));
+    if (!own) return li;
+
+    li.append(
+      h(
+        'div',
+        { class: 'item-actions' },
         h(
-          'div',
-          { class: 'item-actions' },
-          h(
-            'button',
-            {
-              class: 'btn-text',
-              type: 'button',
-              onclick: () => {
-                li.replaceChildren(
-                  h(
-                    'div',
-                    { class: 'edit-row' },
-                    itemForm({
-                      item,
-                      currency,
-                      title: 'Editar regalo',
-                      submitText: 'Guardar cambios',
-                      onCancel: () => renderGroup(),
-                      onSubmit: async (fd) => {
-                        await api(`/api/wishlist/${item.id}`, { method: 'PATCH', form: fd });
-                        toast('Cambios guardados');
-                        await refreshGroup();
-                      },
-                    })
-                  )
-                );
-                li.querySelector('input')?.focus();
-              },
+          'button',
+          {
+            class: 'btn-text',
+            type: 'button',
+            onclick: () => {
+              li.classList.add('editing');
+              li.replaceChildren(
+                h(
+                  'div',
+                  { class: 'edit-row' },
+                  itemForm({
+                    item,
+                    currency,
+                    title: 'Editar regalo',
+                    submitText: 'Guardar cambios',
+                    onCancel: () => renderGroup(),
+                    onSubmit: async (fd) => {
+                      await api(`/api/wishlist/${item.id}`, { method: 'PATCH', form: fd });
+                      toast('Cambios guardados');
+                      await refreshGroup();
+                    },
+                  })
+                )
+              );
+              li.querySelector('input')?.focus();
             },
-            'Editar'
-          ),
-          h(
-            'button',
-            {
-              class: 'btn-text danger',
-              type: 'button',
-              onclick: async () => {
-                const ok = await confirmDialog({
-                  title: '¿Borrar este regalo?',
-                  text: `“${item.name}” se quitará de tu wishlist.`,
-                  confirm: 'Borrar regalo',
-                  danger: true,
-                });
-                if (!ok) return;
-                try {
-                  await api(`/api/wishlist/${item.id}`, { method: 'DELETE' });
-                  toast('Regalo borrado');
-                  await refreshGroup();
-                } catch (e) {
-                  toast(e.message, 'error');
-                }
-              },
+          },
+          'Editar'
+        ),
+        h(
+          'button',
+          {
+            class: 'btn-text danger',
+            type: 'button',
+            onclick: async () => {
+              const ok = await confirmDialog({
+                title: '¿Borrar este regalo?',
+                text: `“${item.name}” se quitará de tu wishlist.`,
+                confirm: 'Borrar regalo',
+                danger: true,
+              });
+              if (!ok) return;
+              try {
+                await api(`/api/wishlist/${item.id}`, { method: 'DELETE' });
+                toast('Regalo borrado');
+                await refreshGroup();
+              } catch (e) {
+                toast(e.message, 'error');
+              }
             },
-            'Borrar'
-          )
+          },
+          'Borrar'
         )
-      );
-    }
+      ),
+      h(
+        'div',
+        { class: 'order-ctl' },
+        h('button', { class: 'order-btn', type: 'button', 'data-move': '-1', 'aria-label': `Subir “${item.name}”` }, svg(ICON_UP)),
+        h('button', { class: 'order-btn', type: 'button', 'data-move': '1', 'aria-label': `Bajar “${item.name}”` }, svg(ICON_DOWN)),
+        h('span', { class: 'drag-handle', title: 'Arrastra para cambiar el orden', 'aria-hidden': 'true' }, svg(ICON_GRIP))
+      )
+    );
     return li;
+  }
+
+  // Renumera la lista y apaga las flechas que no se pueden usar.
+  function renumber(list) {
+    const items = [...list.children];
+    items.forEach((li, i) => {
+      const rank = li.querySelector('.rank');
+      if (rank) {
+        rank.textContent = String(i + 1);
+        rank.setAttribute('aria-label', `Preferencia ${i + 1}`);
+      }
+      const up = li.querySelector('[data-move="-1"]');
+      const down = li.querySelector('[data-move="1"]');
+      if (up) up.disabled = i === 0;
+      if (down) down.disabled = i === items.length - 1;
+    });
+  }
+
+  // Arrastrar con mouse o dedo desde la manija, o usar las flechas.
+  function makeSortable(list, onReorder) {
+    const ids = () => [...list.children].map((li) => Number(li.dataset.id));
+    let drag = null;
+    list.addEventListener('pointerdown', (e) => {
+      const handle = e.target.closest('.drag-handle');
+      if (!handle || e.button > 0 || list.querySelector('.editing')) return;
+      e.preventDefault();
+      drag = { li: handle.closest('li'), before: ids().join(), pointerId: e.pointerId };
+      handle.setPointerCapture(e.pointerId);
+      drag.li.classList.add('dragging');
+    });
+    list.addEventListener('pointermove', (e) => {
+      if (!drag || e.pointerId !== drag.pointerId) return;
+      const target = [...list.children].find((li) => {
+        if (li === drag.li) return false;
+        const r = li.getBoundingClientRect();
+        return e.clientY < r.top + r.height / 2;
+      });
+      if (target) {
+        if (target !== drag.li.nextElementSibling) list.insertBefore(drag.li, target);
+      } else if (list.lastElementChild !== drag.li) {
+        list.append(drag.li);
+      }
+      renumber(list);
+    });
+    const end = (e) => {
+      if (!drag || e.pointerId !== drag.pointerId) return;
+      drag.li.classList.remove('dragging');
+      const changed = ids().join() !== drag.before;
+      drag = null;
+      if (changed) onReorder(ids());
+    };
+    list.addEventListener('pointerup', end);
+    list.addEventListener('pointercancel', end);
+    list.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-move]');
+      if (!btn) return;
+      const li = btn.closest('li');
+      if (btn.dataset.move === '-1' && li.previousElementSibling) list.insertBefore(li, li.previousElementSibling);
+      else if (btn.dataset.move === '1' && li.nextElementSibling) list.insertBefore(li.nextElementSibling, li);
+      else return;
+      renumber(list);
+      btn.disabled ? li.querySelector('.order-btn:not(:disabled)')?.focus() : btn.focus();
+      onReorder(ids());
+    });
+    renumber(list);
+  }
+
+  let orderSave = Promise.resolve();
+  function saveOrder(d, ids) {
+    const byId = new Map(d.myWishlist.map((i) => [i.id, i]));
+    d.myWishlist = ids.map((id) => byId.get(id));
+    // Se guardan en fila para que dos cambios rápidos no lleguen desordenados.
+    orderSave = orderSave.then(async () => {
+      try {
+        await api(`/api/groups/${d.group.id}/wishlist/order`, { method: 'PUT', body: { ids } });
+      } catch (e) {
+        toast(e.message, 'error');
+        await refreshGroup();
+      }
+    });
   }
 
   function itemForm({ item = null, currency, title, submitText, onSubmit, onCancel }) {
@@ -735,6 +954,11 @@
         await refreshGroup();
       },
     });
+    let list = null;
+    if (items.length) {
+      list = h('ol', { class: 'items sortable' }, items.map((i, n) => itemRow(i, { own: true, currency: cur, rank: n + 1 })));
+      makeSortable(list, (ids) => saveOrder(d, ids));
+    }
     return h(
       'section',
       {},
@@ -744,9 +968,8 @@
         h('h2', {}, 'Mi wishlist'),
         h('p', {}, 'Solo la ve la persona a la que le tocas.')
       ),
-      items.length
-        ? h('ul', { class: 'items' }, items.map((i) => itemRow(i, { own: true, currency: cur })))
-        : h('p', { class: 'empty' }, 'Agrega ideas de regalo para que la persona a la que le tocaste sepa qué darte.'),
+      items.length > 1 ? h('p', { class: 'list-hint' }, 'Ordénala por preferencia: la número 1 es la que más quieres. Arrastra desde ⠿ o usa las flechas.') : null,
+      list || h('p', { class: 'empty' }, 'Agrega ideas de regalo para que la persona a la que le tocaste sepa qué darte.'),
       form
     );
   }
@@ -754,30 +977,110 @@
   function receiverWishlistSection(d) {
     const cur = d.group.currency;
     const name = d.receiver.name;
+    const items = d.receiverWishlist;
     return h(
       'section',
       {},
-      h('div', { class: 'section-head' }, h('h2', {}, `Wishlist de ${name}`), h('p', {}, 'Ideas que le gustaría recibir.')),
-      d.receiverWishlist.length
-        ? h('ul', { class: 'items' }, d.receiverWishlist.map((i) => itemRow(i, { own: false, currency: cur })))
+      h(
+        'div',
+        { class: 'section-head' },
+        h('h2', {}, `Wishlist de ${name}`),
+        h('p', {}, items.length > 1 ? 'En orden de preferencia: la número 1 es la que más le gustaría.' : 'Ideas que le gustaría recibir.')
+      ),
+      items.length
+        ? h('ol', { class: 'items' }, items.map((i, n) => itemRow(i, { own: false, currency: cur, rank: n + 1 })))
         : h('p', { class: 'empty' }, `${name} todavía no agrega ideas. Vuelve a revisar más tarde.`)
     );
   }
 
   // -------------------------------------------------------------------------
-  // Panel del organizador
+  // Panel del organizador (ventana)
   // -------------------------------------------------------------------------
-  function adminSection(d) {
+  function openAdmin() {
+    let dlg = document.getElementById('admin-dialog');
+    if (!dlg) {
+      dlg = h('dialog', { id: 'admin-dialog', class: 'admin-dialog', 'aria-labelledby': 'admin-title' });
+      dlg.addEventListener('close', () => dlg.remove());
+      document.body.append(dlg);
+    }
+    fillAdmin(dlg);
+    if (!dlg.open) dlg.showModal();
+    dlg.querySelector('.admin-close')?.focus();
+  }
+
+  // Dibuja (o vuelve a dibujar) el contenido conservando la posición del scroll.
+  function fillAdmin(dlg) {
+    const d = state.detail;
+    const prev = dlg.querySelector('.admin-body');
+    const scroll = prev ? prev.scrollTop : 0;
+    const body = h('div', { class: 'admin-body' }, adminSections(d));
+    dlg.replaceChildren(
+      h(
+        'header',
+        { class: 'admin-top' },
+        h('div', {}, h('h2', { id: 'admin-title' }, 'Administrar intercambio'), h('p', {}, d.group.name)),
+        h('button', { class: 'icon-btn admin-close', type: 'button', 'aria-label': 'Cerrar', onclick: () => dlg.close() }, svg(ICON_X))
+      ),
+      body
+    );
+    body.scrollTop = scroll;
+  }
+
+  function adminSections(d) {
     const g = d.group;
     const gid = g.id;
     const n = d.participants.length;
+    const pending = d.participants.filter((p) => !p.joined).length;
+
+    // --- Enlace del grupo ---
+    const url = inviteUrl(g.inviteToken);
+    const waText = `🎁 Te invito al intercambio “${g.name}”. Entra con tu cuenta de Google y elige tu nombre: ${url}`;
+    const inviteBlock = h(
+      'div',
+      { class: 'admin-block' },
+      h('h3', {}, 'Invita al grupo'),
+      h('p', { class: 'admin-note' }, 'Manda este enlace al grupo. Cada quien entra con su cuenta de Google y elige su nombre de la lista; cada nombre se puede elegir una sola vez.'),
+      h(
+        'div',
+        { class: 'share' },
+        h('code', {}, url),
+        h('button', { class: 'btn btn-sm', type: 'button', onclick: () => copyText(url, 'Enlace copiado') }, 'Copiar enlace'),
+        h('a', { class: 'btn btn-ghost btn-sm', href: `https://wa.me/?text=${encodeURIComponent(waText)}`, target: '_blank', rel: 'noopener noreferrer' }, 'Enviar por WhatsApp')
+      ),
+      h(
+        'p',
+        { class: 'admin-note' },
+        n ? `${n - pending} de ${n} ya eligieron su nombre. ` : '',
+        h(
+          'button',
+          {
+            class: 'btn-text',
+            type: 'button',
+            onclick: async () => {
+              const ok = await confirmDialog({
+                title: '¿Cambiar el enlace?',
+                text: 'El enlace actual dejará de servir y tendrás que mandar el nuevo a quienes aún no entran. Quienes ya eligieron su nombre no se ven afectados.',
+                confirm: 'Cambiar enlace',
+              });
+              if (!ok) return;
+              try {
+                await api(`/api/groups/${gid}/invite`, { method: 'POST' });
+                toast('Enlace nuevo listo');
+                await refreshGroup();
+              } catch (e) {
+                toast(e.message, 'error');
+              }
+            },
+          },
+          'Cambiar enlace'
+        )
+      )
+    );
 
     // --- Participantes ---
-    const rows = d.participants.map((p) => personRow(d, p));
     const addErr = h('p', { class: 'form-error', role: 'alert' });
-    const addName = h('input', { class: 'input', placeholder: 'Nombre que verá el grupo', maxlength: 60, required: true, disabled: g.drawn });
-    const addEmail = h('input', { class: 'input', type: 'email', placeholder: 'correo@gmail.com', maxlength: 254, required: true, disabled: g.drawn });
-    const addBtn = h('button', { class: 'btn', type: 'submit', disabled: g.drawn }, 'Agregar participante');
+    const addName = h('input', { class: 'input', placeholder: 'Nombre que verá el grupo', maxlength: 60, required: true });
+    const addBtn = h('button', { class: 'btn', type: 'submit' }, 'Agregar');
     const addForm = h(
       'form',
       {
@@ -787,18 +1090,34 @@
           addErr.textContent = '';
           busy(addBtn, true, 'Agregando…');
           try {
-            await api(`/api/groups/${gid}/members`, { method: 'POST', body: { name: addName.value, email: addEmail.value } });
-            toast(`${addName.value.trim()} se agregó al intercambio`);
+            await api(`/api/groups/${gid}/members`, { method: 'POST', body: { name: addName.value } });
+            toast(`${addName.value.trim()} se agregó a la lista`);
             await refreshGroup({ groups: true });
+            document.querySelector('#admin-dialog .add-person input')?.focus();
           } catch (ex) {
             addErr.textContent = ex.message;
             busy(addBtn, false);
           }
         },
       },
-      h('label', { class: 'field' }, h('span', {}, 'Nombre'), addName),
-      h('label', { class: 'field' }, h('span', {}, 'Correo de Google'), addEmail),
+      h('label', { class: 'field' }, h('span', {}, 'Agregar a alguien'), addName),
       addBtn
+    );
+    const peopleBlock = h(
+      'div',
+      { class: 'admin-block' },
+      h('h3', {}, 'Participantes'),
+      h('p', { class: 'admin-note' }, 'El nombre que escribas es el que verá todo el grupo. Si alguien eligió un nombre que no era el suyo, usa “Liberar” para que la persona correcta lo elija.'),
+      n
+        ? h(
+            'table',
+            { class: 'people' },
+            h('thead', {}, h('tr', {}, h('th', {}, 'Nombre'), h('th', {}, 'Quién lo eligió'), h('th', {}, h('span', { class: 'sr-only' }, 'Acciones')))),
+            h('tbody', {}, d.participants.map((p) => personRow(d, p)))
+          )
+        : h('p', { class: 'empty' }, 'Todavía no hay nadie en la lista.'),
+      g.drawn ? h('p', { class: 'admin-note' }, 'Para agregar o quitar personas, primero reinicia el sorteo.') : addForm,
+      addErr
     );
 
     // --- Sorteo ---
@@ -806,7 +1125,7 @@
       ? h(
           'div',
           { class: 'draw-box' },
-          h('p', {}, `El sorteo ya se hizo. Cada quien puede ver a quién le regala.`),
+          h('p', {}, 'El sorteo ya se hizo. Cada quien puede ver a quién le regala.'),
           h(
             'button',
             {
@@ -840,7 +1159,9 @@
             {},
             n < 3
               ? `Hay ${n} ${n === 1 ? 'participante' : 'participantes'}. Se necesitan al menos 3 para sortear.`
-              : `Hay ${n} participantes. Cuando estén todos, haz el sorteo: a cada quien le tocará otra persona al azar y nadie podrá ver las asignaciones de los demás.`
+              : pending
+                ? `Hay ${n} participantes y ${pending} aún no ${pending === 1 ? 'elige' : 'eligen'} su nombre. Puedes sortear ya: verán a quién le regalan en cuanto entren.`
+                : `Los ${n} participantes ya eligieron su nombre. A cada quien le tocará otra persona al azar y nadie podrá ver las asignaciones de los demás.`
           ),
           h(
             'button',
@@ -849,20 +1170,21 @@
               type: 'button',
               disabled: n < 3,
               onclick: async (e) => {
+                const btn = e.currentTarget;
                 const ok = await confirmDialog({
                   title: '¿Hacer el sorteo?',
                   text: `Se sortearán ${n} participantes. Después ya no podrás agregar ni quitar personas, a menos que reinicies el sorteo.`,
                   confirm: 'Hacer el sorteo',
                 });
                 if (!ok) return;
-                busy(e.target, true, 'Sorteando…');
+                busy(btn, true, 'Sorteando…');
                 try {
                   await api(`/api/groups/${gid}/draw`, { method: 'POST' });
                   toast('¡Sorteo hecho! Ya cada quien puede ver a quién le regala.');
                   await refreshGroup({ groups: true });
                 } catch (ex) {
                   toast(ex.message, 'error');
-                  busy(e.target, false);
+                  busy(btn, false);
                 }
               },
             },
@@ -881,7 +1203,7 @@
     const infoForm = h(
       'form',
       {
-        style: 'display:flex;flex-direction:column;gap:14px',
+        class: 'stack-form',
         onsubmit: async (e) => {
           e.preventDefault();
           infoErr.textContent = '';
@@ -906,59 +1228,11 @@
       infoErr
     );
 
-    const link = location.origin + location.pathname;
-    return h(
-      'section',
-      { class: 'admin', 'aria-labelledby': 'admin-title' },
-      h(
-        'div',
-        {},
-        h('h2', { id: 'admin-title' }, 'Administrar intercambio'),
-        h('p', { class: 'admin-note' }, 'Solo tú ves esta sección porque organizas el grupo. Aun así, tampoco puedes ver a quién le tocó cada quien.')
-      ),
-      h(
-        'div',
-        {},
-        h('h3', {}, 'Participantes'),
-        h('p', { class: 'admin-note', style: 'margin:-4px 0 14px' }, 'El nombre que escribas es el que verá todo el grupo. Cada persona entra con la cuenta de Google de ese correo.'),
-        h(
-          'table',
-          { class: 'people' },
-          h('thead', {}, h('tr', {}, h('th', {}, 'Nombre'), h('th', {}, 'Correo'), h('th', {}, 'Estado'), h('th', {}, h('span', { class: 'sr-only' }, 'Acciones')))),
-          h('tbody', {}, rows)
-        ),
-        g.drawn ? h('p', { class: 'admin-note' }, 'Para agregar o quitar personas, primero reinicia el sorteo.') : addForm,
-        addErr
-      ),
-      h('div', {}, h('h3', {}, 'Sorteo'), drawBox),
-      h(
-        'div',
-        {},
-        h('h3', {}, 'Invita al grupo'),
-        h(
-          'div',
-          { class: 'share' },
-          h('code', {}, link),
-          h(
-            'button',
-            {
-              class: 'btn btn-ghost btn-sm',
-              type: 'button',
-              onclick: async () => {
-                try {
-                  await navigator.clipboard.writeText(link);
-                  toast('Enlace copiado');
-                } catch {
-                  toast('No se pudo copiar. Selecciona el enlace y cópialo.', 'error');
-                }
-              },
-            },
-            'Copiar enlace'
-          )
-        ),
-        h('p', { class: 'admin-note' }, 'Comparte este enlace. Cada quien verá este intercambio al entrar con su correo registrado.')
-      ),
-      h('div', {}, h('h3', {}, 'Datos del intercambio'), infoForm),
+    return [
+      inviteBlock,
+      peopleBlock,
+      h('div', { class: 'admin-block' }, h('h3', {}, 'Sorteo'), drawBox),
+      h('div', { class: 'admin-block' }, h('h3', {}, 'Datos del intercambio'), infoForm),
       h(
         'div',
         { class: 'danger-zone' },
@@ -966,9 +1240,8 @@
         h(
           'button',
           {
-            class: 'btn btn-ghost',
+            class: 'btn btn-ghost danger-btn',
             type: 'button',
-            style: 'color:var(--noche)',
             onclick: async () => {
               const ok = await confirmDialog({
                 title: `¿Borrar “${g.name}”?`,
@@ -990,73 +1263,89 @@
           },
           'Borrar intercambio'
         )
-      )
-    );
+      ),
+    ];
   }
 
   function personRow(d, p) {
     const g = d.group;
     const tr = h('tr');
+    const act = async (fn, okMsg) => {
+      try {
+        await fn();
+        toast(okMsg);
+        await refreshGroup({ groups: true });
+      } catch (e) {
+        toast(e.message, 'error');
+      }
+    };
+    const release = async () => {
+      const extra = g.drawn ? ' Esa cuenta ya pudo ver a quién le regala este nombre; si fue un error, considera reiniciar el sorteo.' : '';
+      const ok = await confirmDialog({
+        title: `¿Liberar “${p.name}”?`,
+        text: `${p.account || 'La cuenta actual'} dejará de estar ligada a este nombre, y el nombre volverá a aparecer en el enlace del grupo para que la persona correcta lo elija.${extra}`,
+        confirm: 'Liberar nombre',
+        danger: true,
+      });
+      if (ok) act(() => api(`/api/groups/${g.id}/members/${p.id}/release`, { method: 'POST' }), `“${p.name}” quedó libre`);
+    };
+    const claimMine = async () => {
+      const ok = await confirmDialog({
+        title: `¿Eres ${p.name}?`,
+        text: `Tu cuenta ${state.user.email} quedará ligada a este nombre y entrarás al sorteo.`,
+        confirm: `Sí, soy ${p.name}`,
+      });
+      if (ok) act(() => api(`/api/invites/${g.inviteToken}/claim`, { method: 'POST', body: { memberId: p.id } }), `Ya participas como ${p.name}`);
+    };
+    const remove = async () => {
+      const ok = await confirmDialog({
+        title: `¿Quitar a ${p.name}?`,
+        text: 'Se quitará del intercambio junto con su wishlist.',
+        confirm: 'Quitar',
+        danger: true,
+      });
+      if (ok) act(() => api(`/api/groups/${g.id}/members/${p.id}`, { method: 'DELETE' }), `${p.name} ya no está en el intercambio`);
+    };
     const view = () => {
       tr.replaceChildren(
-        h('td', {}, p.name, p.isMe ? ' (tú)' : ''),
-        h('td', { class: 'email' }, p.email),
-        h('td', {}, h('span', { class: `pill${p.joined ? ' in' : ''}` }, p.joined ? 'Ya entró' : 'Aún no entra')),
+        h('td', { class: 'person-name' }, p.name, p.isMe ? ' (tú)' : ''),
+        h('td', { class: 'email' }, p.joined ? h('span', { class: 'pill in' }, p.account || 'Ya entró') : h('span', { class: 'pill' }, 'Pendiente')),
         h(
           'td',
           { class: 'actions' },
           h('button', { class: 'btn-text', type: 'button', onclick: edit }, 'Editar'),
+          !d.me && !p.joined ? h('button', { class: 'btn-text', type: 'button', onclick: claimMine }, 'Soy yo') : null,
+          p.joined ? h('button', { class: 'btn-text', type: 'button', onclick: release }, 'Liberar') : null,
           h(
             'button',
-            {
-              class: 'btn-text danger',
-              type: 'button',
-              disabled: g.drawn,
-              title: g.drawn ? 'Reinicia el sorteo para quitar a alguien' : null,
-              onclick: async () => {
-                const ok = await confirmDialog({
-                  title: `¿Quitar a ${p.name}?`,
-                  text: 'Se quitará del intercambio junto con su wishlist.',
-                  confirm: 'Quitar',
-                  danger: true,
-                });
-                if (!ok) return;
-                try {
-                  await api(`/api/groups/${g.id}/members/${p.id}`, { method: 'DELETE' });
-                  toast(`${p.name} ya no está en el intercambio`);
-                  await refreshGroup({ groups: true });
-                } catch (e) {
-                  toast(e.message, 'error');
-                }
-              },
-            },
+            { class: 'btn-text danger', type: 'button', disabled: g.drawn, title: g.drawn ? 'Reinicia el sorteo para quitar a alguien' : null, onclick: remove },
             'Quitar'
           )
         )
       );
     };
     const edit = () => {
-      const n = h('input', { class: 'input', value: p.name, maxlength: 60, 'aria-label': 'Nombre' });
-      const m = h('input', { class: 'input', type: 'email', value: p.email, maxlength: 254, 'aria-label': 'Correo' });
+      const nameInput = h('input', { class: 'input', value: p.name, maxlength: 60, 'aria-label': 'Nombre' });
       const save = h('button', { class: 'btn-text', type: 'button' }, 'Guardar');
       save.addEventListener('click', async () => {
         save.disabled = true;
         try {
-          await api(`/api/groups/${g.id}/members/${p.id}`, { method: 'PATCH', body: { name: n.value, email: m.value } });
-          toast('Participante actualizado');
+          await api(`/api/groups/${g.id}/members/${p.id}`, { method: 'PATCH', body: { name: nameInput.value } });
+          toast('Nombre actualizado');
           await refreshGroup({ groups: true });
         } catch (e) {
           toast(e.message, 'error');
           save.disabled = false;
         }
       });
+      nameInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') save.click();
+      });
       tr.replaceChildren(
-        h('td', {}, n),
-        h('td', {}, m),
-        h('td', {}, h('span', { class: `pill${p.joined ? ' in' : ''}` }, p.joined ? 'Ya entró' : 'Aún no entra')),
+        h('td', { colspan: 2 }, nameInput),
         h('td', { class: 'actions' }, save, h('button', { class: 'btn-text', type: 'button', onclick: view }, 'Cancelar'))
       );
-      n.focus();
+      nameInput.focus();
     };
     view();
     return tr;
@@ -1090,25 +1379,44 @@
     const rowsBox = h('div', { class: 'person-rows' });
     const count = h('p', { class: 'hint' });
 
+    const meCheck = h('input', { type: 'checkbox', checked: true });
+    const meName = h('input', { class: 'input', value: state.user.name || '', maxlength: 60, placeholder: 'Tu nombre en el grupo', 'aria-label': 'Tu nombre en el grupo' });
+
     const updateCount = () => {
-      const filled = [...rowsBox.children].filter((r) => r.querySelector('[name=pname]').value.trim() || r.querySelector('[name=pemail]').value.trim()).length;
-      count.textContent = `${filled} ${filled === 1 ? 'persona' : 'personas'} en la lista. Se necesitan al menos 3 para el sorteo; puedes agregar más después.`;
+      const others = [...rowsBox.querySelectorAll('input')].filter((i) => i.value.trim()).length;
+      const total = others + (meCheck.checked ? 1 : 0);
+      count.textContent = `${total} ${total === 1 ? 'persona' : 'personas'} en total. Se necesitan al menos 3 para el sorteo; puedes agregar más después.`;
     };
-    const addRow = (name = '', email = '', focus = false) => {
-      const n = h('input', { class: 'input', name: 'pname', value: name, maxlength: 60, placeholder: 'Nombre que verá el grupo', 'aria-label': 'Nombre', oninput: updateCount });
-      const m = h('input', { class: 'input', name: 'pemail', type: 'email', value: email, maxlength: 254, placeholder: 'correo@gmail.com', 'aria-label': 'Correo de Google', oninput: updateCount });
+    meCheck.addEventListener('change', () => {
+      meName.disabled = !meCheck.checked;
+      updateCount();
+    });
+    meName.addEventListener('input', updateCount);
+
+    const addRow = (name = '', after = null, focus = false) => {
+      const input = h('input', { class: 'input', value: name, maxlength: 60, placeholder: 'Nombre', 'aria-label': 'Nombre de un participante', oninput: updateCount });
       const row = h(
         'div',
         { class: 'person-row' },
-        n,
-        m,
+        input,
         h('button', { class: 'icon-btn', type: 'button', 'aria-label': 'Quitar de la lista', onclick: () => { row.remove(); updateCount(); } }, svg(ICON_X))
       );
-      rowsBox.append(row);
-      if (focus) n.focus();
+      // Pegar una lista (un nombre por línea) crea una fila por nombre.
+      input.addEventListener('paste', (e) => {
+        const lines = (e.clipboardData?.getData('text') || '').split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+        if (lines.length < 2) return;
+        e.preventDefault();
+        input.value = lines[0];
+        let prev = row;
+        for (const l of lines.slice(1)) prev = addRow(l, prev);
+        updateCount();
+      });
+      if (after) after.after(row);
+      else rowsBox.append(row);
+      if (focus) input.focus();
       updateCount();
+      return row;
     };
-    addRow(state.user.name || '', state.user.email);
     addRow();
     addRow();
 
@@ -1116,29 +1424,27 @@
     const form = h(
       'form',
       {
-        style: 'display:flex;flex-direction:column;gap:22px',
+        class: 'stack-form roomy',
         onsubmit: async (e) => {
           e.preventDefault();
           err.textContent = '';
-          const participants = [];
-          for (const r of rowsBox.children) {
-            const name = r.querySelector('[name=pname]').value.trim();
-            const email = r.querySelector('[name=pemail]').value.trim();
-            if (!name && !email) continue;
-            if (!name || !email) {
-              err.textContent = `Falta ${name ? 'el correo' : 'el nombre'} de ${name || email}.`;
-              return;
-            }
-            participants.push({ name, email });
-          }
+          const participants = [...rowsBox.querySelectorAll('input')].map((i) => i.value.trim()).filter(Boolean).map((name) => ({ name }));
           busy(submit, true, 'Creando…');
           try {
             const { id } = await api('/api/groups', {
               method: 'POST',
-              body: { name: fName.value, eventDate: fDate.value, budget: fBudget.value, currency: fCur.value, description: fDesc.value, participants },
+              body: {
+                name: fName.value,
+                eventDate: fDate.value,
+                budget: fBudget.value,
+                currency: fCur.value,
+                description: fDesc.value,
+                me: { participate: meCheck.checked, name: meName.value },
+                participants,
+              },
             });
             await loadGroups();
-            toast('Intercambio creado');
+            state.openAdmin = 'Intercambio creado. Ahora comparte el enlace con el grupo.';
             location.hash = `#/g/${id}`;
           } catch (ex) {
             err.textContent = ex.message;
@@ -1157,11 +1463,18 @@
       h(
         'div',
         { class: 'panel' },
-        h('h2', {}, 'Participantes'),
-        h('p', { class: 'hint' }, 'Tú ya estás en la lista. Si solo vas a organizar, quítate.'),
+        h('h2', {}, 'Tú'),
+        h('label', { class: 'check-row' }, meCheck, 'Yo también participo en el sorteo'),
+        meName
+      ),
+      h(
+        'div',
+        { class: 'panel' },
+        h('h2', {}, 'Los demás participantes'),
+        h('p', { class: 'hint' }, 'Escribe solo los nombres, tal como quieres que los vea el grupo. Puedes pegar una lista con un nombre por línea.'),
         rowsBox,
         count,
-        h('div', {}, h('button', { class: 'btn btn-ghost', type: 'button', onclick: () => addRow('', '', true) }, '+ Agregar otra persona'))
+        h('div', {}, h('button', { class: 'btn btn-ghost', type: 'button', onclick: () => addRow('', null, true) }, '+ Agregar otra persona'))
       ),
       h('div', { class: 'create-actions' }, submit, h('a', { class: 'btn btn-ghost', href: '#/' }, 'Cancelar')),
       err
@@ -1172,7 +1485,7 @@
         'section',
         { class: 'create' },
         h('h1', {}, 'Crear intercambio'),
-        h('p', {}, 'Registra a cada persona con su nombre y el correo de Google con el que va a entrar. El nombre que escribas es el que verá el grupo.'),
+        h('p', {}, 'Escribe los nombres del grupo. Después tendrás un enlace para compartir: cada quien entra con su cuenta de Google y elige su nombre.'),
         form
       )
     );

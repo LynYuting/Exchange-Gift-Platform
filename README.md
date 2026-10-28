@@ -2,12 +2,13 @@
 
 Plataforma sencilla para organizar intercambios de regalos.
 
-- El organizador crea un grupo y registra a cada participante con **nombre** y **correo**.
-- Cada persona entra con **su cuenta de Google**; el correo la vincula a sus grupos, pero el nombre que se muestra es **el que puso el organizador**.
+- El organizador crea un grupo y escribe solo los **nombres** de los participantes.
+- Comparte **un solo enlace** con todo el grupo. Cada quien entra con **la cuenta de Google que quiera** y **elige su nombre** de la lista; cada nombre se puede elegir una sola vez.
 - La barra lateral muestra todos los grupos en los que está la persona.
 - En cada grupo ve una etiqueta **De: (su nombre) / Para: (a quién le regala)**, y abajo a los demás participantes con **Para: \*\*\***.
 - **Nadie ve las asignaciones de los demás, ni el organizador.** El servidor nunca las envía.
-- Cada quien arma su **wishlist** (nombre, costo, link y foto). Solo la ve la persona a la que le tocó regalarle, y cada quien ve la wishlist de su asignado.
+- Cada quien arma su **wishlist** (nombre, costo, link y foto) **ordenada por preferencia**. Solo la ve la persona a la que le tocó regalarle, y cada quien ve la wishlist de su asignado.
+- El organizador administra todo desde una ventana: enlace, participantes, sorteo y datos del evento.
 
 ---
 
@@ -126,12 +127,17 @@ La app activa **Row Level Security** en sus tablas: así la API REST pública de
 
 ## 7. Cómo se usa
 
-1. **Organizador**: entra → **Crear intercambio** → nombre, fecha, presupuesto y la lista de personas (nombre + correo de Google). Ya apareces en la lista; si solo vas a organizar, quítate.
-2. Comparte el enlace. Cada quien entra con el Google de ese correo y el grupo le aparece solo.
-3. Cuando estén todos (mínimo 3), el organizador pulsa **Hacer el sorteo**.
-4. Cada participante ve a quién le regala, agrega ideas a su wishlist y revisa la de su asignado.
+1. **Organizador**: entra → **Crear intercambio** → nombre, fecha, presupuesto y los **nombres** del grupo. Puedes pegar una lista con un nombre por línea. Marca "Yo también participo" si entras al sorteo.
+2. Se abre **Administrar intercambio** con el enlace del grupo: pulsa **Copiar enlace** o **Enviar por WhatsApp** y mándalo al grupo.
+3. Cada quien abre el enlace, entra con Google, **elige su nombre** y confirma **"Sí, soy …"**. Los nombres ya elegidos aparecen tachados.
+4. Cuando quieras (mínimo 3 personas), pulsa **Hacer el sorteo**. Quien elija su nombre después del sorteo ve su asignación al entrar.
+5. Cada participante ve a quién le regala, arma su wishlist y la **ordena** (arrastrando ⠿ o con las flechas; la número 1 es la favorita).
 
-El organizador puede cambiar nombres y correos en cualquier momento. Para agregar o quitar personas después del sorteo debe **reiniciar el sorteo** (las wishlists se conservan).
+**Si alguien eligió el nombre equivocado**, en el panel verás qué cuenta eligió cada nombre: pulsa **Liberar** y el nombre vuelve a estar disponible en el enlace. Si ya se había hecho el sorteo, esa persona pudo ver la asignación; en ese caso reinicia el sorteo.
+
+**Si el enlace se compartió de más**, pulsa **Cambiar enlace**: el anterior deja de servir y quienes ya eligieron su nombre no se ven afectados.
+
+Reglas: una cuenta de Google solo puede elegir un nombre por intercambio, un nombre solo puede estar ligado a una cuenta y no puede haber dos nombres iguales en el mismo grupo. Para agregar o quitar personas después del sorteo hay que **reiniciar el sorteo** (las wishlists se conservan).
 
 **El sorteo:** se barajan los participantes con un generador aleatorio criptográfico y se forma un solo círculo; cada quien le regala al siguiente. Nadie se toca a sí mismo y no hay parejas que se regalen entre ellas.
 
@@ -140,13 +146,14 @@ El organizador puede cambiar nombres y correos en cualquier momento. Para agrega
 ## 8. Privacidad y seguridad
 
 - La API solo devuelve **tu** asignación. Los demás llegan sin ningún dato de a quién le regalan; en pantalla se ven como `***`.
-- Los correos de los participantes solo los ve el organizador (él los registró).
+- Qué cuenta de Google eligió cada nombre solo lo ve el organizador (para corregir errores). El enlace del grupo también solo lo ve él.
+- El enlace es aleatorio (128 bits). Sin iniciar sesión solo muestra el nombre del grupo; la lista de nombres aparece al entrar con Google.
 - Las wishlists y sus fotos solo las pueden pedir su dueño y la persona a la que le tocó regalarle. Las fotos se guardan en la base de datos y se sirven con verificación de sesión, nunca como enlaces públicos.
 - El inicio de sesión verifica el token de Google en el servidor y exige correo verificado.
 - Cookie de sesión `HttpOnly` + `Secure` + `SameSite=Lax`, protección CSRF, CSP estricta y límite de intentos de inicio de sesión.
 - Las fotos se validan por su contenido (JPG, PNG, WEBP o GIF, máx. 4 MB; Vercel acepta hasta 4.5 MB por petición). El navegador las reduce a 1200 px antes de subirlas.
 
-> Nota honesta: quien tenga acceso a la base de datos (tu cuenta de Neon/Supabase o la carpeta `data/`) sí podría leer las asignaciones. Si el organizador administra la base de datos, el grupo tiene que confiar en que no la abrirá.
+> Nota honesta: con un solo enlace para todos, alguien podría elegir a propósito el nombre de otra persona para ver su asignación. El panel del organizador muestra qué cuenta eligió cada nombre, así que se notaría y se puede **Liberar**. Además, quien tenga acceso a la base de datos (tu cuenta de Neon/Supabase o la carpeta `data/`) sí podría leer las asignaciones.
 
 ---
 
@@ -180,7 +187,12 @@ intercambio-navideno/
 | PATCH / DELETE | `/api/groups/:id/members/:mid` | organizador |
 | POST | `/api/groups/:id/draw` y `/draw/reset` | organizador |
 | POST | `/api/groups/:id/wishlist` | participante |
+| PUT | `/api/groups/:id/wishlist/order` | participante (orden de preferencia) |
 | PATCH / DELETE | `/api/wishlist/:itemId` | dueño del regalo |
 | GET | `/api/wishlist/:itemId/photo` | dueño o quien le regala |
+| POST | `/api/groups/:id/members/:mid/release` | organizador (liberar un nombre) |
+| POST | `/api/groups/:id/invite` | organizador (cambiar enlace) |
+| GET | `/api/invites/:token` | cualquiera con el enlace |
+| POST | `/api/invites/:token/claim` | con sesión (elegir nombre) |
 
 Toda petición que no sea GET debe incluir el encabezado `X-Requested-With: intercambio` (la interfaz ya lo hace).
